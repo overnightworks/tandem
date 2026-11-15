@@ -1,6 +1,7 @@
 import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -8,6 +9,7 @@ from fakeredis import FakeAsyncRedis, FakeServer
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 
+from tandem import Client, Deadlines
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.proxy import TcpProxy
@@ -29,6 +31,18 @@ def redis_url() -> str:
 def key_prefix() -> str:
     """A prefix of its own, so tests share one server without sharing keys or channels."""
     return f"t-{uuid.uuid4().hex[:12]}"
+
+
+@pytest.fixture
+def new_deadlines(key_prefix: str) -> Callable[..., Deadlines]:
+    """Deadlines of one kind under the test's prefix; every call with the same kind shares them."""
+
+    def build(
+        client: Client, *, kind: str = "work", claim_for: timedelta = timedelta(seconds=30)
+    ) -> Deadlines:
+        return Deadlines(client, key_prefix=key_prefix, kind=kind, claim_for=claim_for)
+
+    return build
 
 
 @pytest.fixture
