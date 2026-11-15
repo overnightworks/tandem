@@ -151,8 +151,9 @@ Covers what pods share through Redis: waking one another across pods, deadlines 
 kept in Redis. It excludes deadlines and holds an app keeps in its own database under its own
 transaction, such as skat's chair holds.
 
-New code coordinates through tandem at once; an existing copy moves to tandem when its app touches it
-anyway. Today tandem ships the wake channel and deadlines; leases join with their release.
+New code coordinates through tandem at once. An existing copy moves to tandem now, as soon as the tandem
+release that ships its primitive exists. The move runs as one fleet-program item with a sub-issue in each
+covered repository. Today tandem ships the wake channel and deadlines; leases join with their release.
 
 A deviation is a request naming its enduring harm. tandem's head reviews it, only the operator rules it,
 and the ruling is recorded in this section; the process is marketplace's
