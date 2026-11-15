@@ -145,7 +145,8 @@ async def agents_gone(served: Served) -> list[str]:
 The leases of a family live in `<key_prefix>:tandem:v1:l:<family>:expiry` and `...:generation`, its lapse
 queue in `...:l:<family>:lapse:{due,claimed,claim}` and the app's epoch in `<key_prefix>:tandem:v1:epoch`,
 disjoint from the channel and the deadlines. Only the expiry decides ALIVE: a lapse that a handler claimed
-reads GONE, and a `renew` after it starts a new generation.
+reads GONE, or UNKNOWN until `lasts` have passed since the epoch, and a `renew` after it starts a new
+generation.
 
 The channel is `<key_prefix>:tandem:v1:wake`: one channel per key prefix, so every pod that follows the
 same channel uses the same `key_prefix`. An app may run several `WakeChannel`s on one Redis under distinct
