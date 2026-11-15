@@ -66,6 +66,7 @@ def test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming
     make_client: Callable[..., Redis], redis_url: str, argument: str, value: object
 ):
     arguments = {"key_prefix": "skat", "family": "gpu", "lasts": timedelta(seconds=30)}
+    client = make_client(redis_url)
 
     with pytest.raises(ValueError, match=argument):
-        Locks(make_client(redis_url), **{**arguments, argument: value})  # pyright: ignore[reportArgumentType] - the case passes a wrong type on purpose
+        Locks(client, **{**arguments, argument: value})  # pyright: ignore[reportArgumentType] - the case passes a wrong type on purpose
