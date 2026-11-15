@@ -277,9 +277,8 @@ async def test_an_uncancelled_exit_writes_lease_end_ended_like_a_direct_end(
         await hold_then_exit()
 
     (line,) = log_lines.of("lease_end.ended", "tandem.leases")
-    assert (line["level"], line["outcome"]) == (
-        ("error", "failed") if end_fails else ("info", "ok")
-    )
+    assert line["level"] == ("error" if end_fails else "info")
+    assert line["outcome"] == ("failed" if end_fails else "ok")
     assert line.get("error_type") == (StoreError.__name__ if end_fails else None)
     assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
     assert not log_lines.of("lease_end.failed", "tandem.leases")
