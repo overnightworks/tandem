@@ -11,7 +11,7 @@ from redis.backoff import ConstantBackoff, NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from tandem import Wake, WakeChannel, wake
-from tests.conftest import Backoffs
+from tests.support.backoffs import Backoffs
 from tests.support.host import ScenarioHost
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader

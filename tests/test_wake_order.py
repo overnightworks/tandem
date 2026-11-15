@@ -8,7 +8,8 @@ from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
 
 from tandem import Resubscribed, Wake, WakeChannel
-from tests.conftest import Backoffs
+from tests.support.backoffs import Backoffs
+from tests.support.numbered_publisher import NumberedPublisher
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 from tests.support.waiting import BOUND_SECONDS, until, within
@@ -18,19 +19,21 @@ REPLACEMENT_MESSAGES = 20
 
 @dataclass
 class Disruption:
-    """One way to lose the subscription, and how the replacement is let proceed."""
+    """One way to lose the subscription, and when its replacement is let proceed."""
 
     retry: Retry
-    begin: Callable[[TcpProxy, Redis, list[int]], Awaitable[None]]
+    begin: Callable[[TcpProxy, Redis, str], Awaitable[None]]
     release_when: Callable[[Backoffs], Awaitable[None]]
 
 
-async def _kill_and_hold(proxy: TcpProxy, observer: Redis, connection_ids: list[int]) -> None:
+async def _kill_and_hold(proxy: TcpProxy, observer: Redis, key_prefix: str) -> None:
     proxy.hold()
-    await observer.client_kill_filter(_id=str(connection_ids[0]))
+    for connection in await observer.client_list(_type="pubsub"):
+        if connection["name"].startswith(key_prefix):
+            await observer.client_kill_filter(_id=connection["id"])
 
 
-async def _cut(proxy: TcpProxy, observer: Redis, connection_ids: list[int]) -> None:
+async def _cut(proxy: TcpProxy, observer: Redis, key_prefix: str) -> None:
     proxy.cut()
 
 
@@ -64,79 +67,35 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
     backoffs: Backoffs,
 ):
     reader_client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=disruption.retry)
-    publisher = make_client(redis_url)
-    sent: list[tuple[int, int]] = []  # the number and the receivers Redis counted for it
-    zero_seen = asyncio.Event()
-    stop = asyncio.Event()
-
-    async def publish_without_pause(channel: str) -> None:
-        number = 0
-        while not stop.is_set():
-            receivers = await publisher.publish(channel, str(number))
-            sent.append((number, receivers))
-            if receivers == 0:
-                zero_seen.set()
-            number += 1
-            await asyncio.sleep(0)
-
     async with Reader(WakeChannel(reader_client, key_prefix=key_prefix)) as reader:
         await reader.next_resubscribed()
         (channel,) = await observer.pubsub_channels(f"{key_prefix}*")
-        connection_ids = [
-            int(connection["id"])
-            for connection in await observer.client_list(_type="pubsub")
-            if connection["name"].startswith(key_prefix)
-        ]
-        publishing = asyncio.create_task(publish_without_pause(str(channel)))
+        publisher = NumberedPublisher(make_client(redis_url), str(channel))
+        publisher.start()
         try:
-            await until(_published_with_a_receiver(sent))
-            await disruption.begin(proxy, observer, connection_ids)
-            await within(zero_seen.wait())
+            await until(publisher.has_had_a_receiver)
+            await disruption.begin(proxy, observer, key_prefix)
+            await within(publisher.zero_seen.wait())
             await disruption.release_when(backoffs)
             proxy.restore()
-            await until(_replacement_got(sent, REPLACEMENT_MESSAGES))
+            await until(lambda: publisher.replacement_has_got(REPLACEMENT_MESSAGES))
         finally:
-            stop.set()
-            await publishing
+            await publisher.stop()
 
-        first_zero = next(index for index, (_, receivers) in enumerate(sent) if receivers == 0)
-        replacement = [number for number, receivers in sent[first_zero:] if receivers == 1]
-        zeros = {number for number, receivers in sent if receivers == 0}
+        replacement = publisher.numbers_after_the_zeros()
         assert replacement, "the publisher saw no receiver after the run of zero"
+        yielded = await _read_until(reader, Wake(str(replacement[-1])))
 
-        yielded = await _read_until(reader, replacement[-1])
-
-    assert sum(isinstance(event, Resubscribed) for event in yielded) == 1
-    resubscribed_at = max(
-        index for index, event in enumerate(yielded) if isinstance(event, Resubscribed)
-    )
-    after_resubscribed = [
-        int(event.address) for event in yielded[resubscribed_at:] if isinstance(event, Wake)
-    ]
-    assert after_resubscribed == replacement
-    assert zeros.isdisjoint(int(event.address) for event in yielded if isinstance(event, Wake))
+    resubscribed = [index for index, event in enumerate(yielded) if isinstance(event, Resubscribed)]
+    assert len(resubscribed) == 1
+    wakes = [int(event.address) for event in yielded if isinstance(event, Wake)]
+    assert yielded[resubscribed[0] + 1 :] == [Wake(str(number)) for number in replacement]
+    assert publisher.numbers_with_no_receiver().isdisjoint(wakes)
 
 
-def _published_with_a_receiver(sent: list[tuple[int, int]]) -> Callable[[], Awaitable[bool]]:
-    async def condition() -> bool:
-        return any(receivers == 1 for _, receivers in sent)
-
-    return condition
-
-
-def _replacement_got(sent: list[tuple[int, int]], count: int) -> Callable[[], Awaitable[bool]]:
-    async def condition() -> bool:
-        zeros = [index for index, (_, receivers) in enumerate(sent) if receivers == 0]
-        return bool(zeros) and sum(receivers for _, receivers in sent[zeros[-1] :]) >= count
-
-    return condition
-
-
-async def _read_until(reader: Reader, last_number: int) -> list[Wake | Resubscribed]:
+async def _read_until(reader: Reader, last: Wake) -> list[Wake | Resubscribed]:
     yielded: list[Wake | Resubscribed] = []
     async with asyncio.timeout(BOUND_SECONDS):
-        while True:
-            event = await reader.next()
-            yielded.append(event)
-            if event == Wake(str(last_number)):
-                return yielded
+        while last not in yielded:
+            yielded.append(await reader.next())
+    return yielded

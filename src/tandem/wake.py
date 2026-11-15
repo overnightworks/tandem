@@ -48,7 +48,7 @@ class WakeChannel:
                 await pubsub.subscribe(self._channel)
                 while True:
                     message = await pubsub.get_message(timeout=None)
-                    if message is None:  # redis-py answers its own health check, nobody else's
+                    if message is None:  # the reply to redis-py's health check is no event
                         continue
                     event = _event(message)
                     if isinstance(event, Resubscribed):

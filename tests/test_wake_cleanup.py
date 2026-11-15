@@ -6,7 +6,7 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
 from tandem import WakeChannel
-from tests.conftest import Backoffs
+from tests.support.backoffs import Backoffs
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 from tests.support.waiting import until

@@ -1,3 +1,4 @@
+# ruff: noqa: T201 - this process reports to its parent test on stdout
 """A WakeChannel reader or writer as a process: `read URL PREFIX` or `write URL PREFIX ADDRESS`."""
 
 import asyncio
