@@ -5,7 +5,6 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import cast
 
 from redis import exceptions as redis_errors
 from redis.asyncio import Redis
@@ -85,12 +84,19 @@ class WakeChannel:
                     message = await pubsub.get_message(timeout=None)
                     if message is None:  # the reply to redis-py's health check is no event
                         continue
-                    event = self._event(message)
-                    if event is None:
+                    try:
+                        event = self._event(message)
+                    except UnicodeDecodeError as error:
+                        self._log_skipped_payload(error)
                         continue
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                     yield event
+            except UnicodeDecodeError as error:
+                # A client that decodes responses fails inside get_message, which leaves the
+                # connection unusable: the subscription is established again, with a Resubscribed.
+                self._log_skipped_payload(error)
+                continue
             except (redis_errors.AuthenticationError, redis_errors.AuthorizationError) as error:
                 raise StoreError(f"subscribe to {self._channel} refused: {error}") from error
             except redis_errors.ConnectionError, redis_errors.TimeoutError:
@@ -112,14 +118,11 @@ class WakeChannel:
                 await pubsub.unsubscribe(self._channel)
         await pubsub.aclose()
 
-    def _event(self, message: dict[str, object]) -> Wake | Resubscribed | None:
+    def _log_skipped_payload(self, error: UnicodeDecodeError) -> None:
+        # One payload no pod of this app published must not end the subscription for good.
+        logger.warning("skipped a wake payload of %d bytes, no valid UTF-8", len(error.object))
+
+    def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
         if message["type"] == "subscribe":
             return Resubscribed()
-        data = message["data"]
-        try:
-            return Wake(self._redis.get_encoder().decode(data, force=True))
-        except UnicodeDecodeError:
-            # One payload no pod of this app published must not end the subscription for good.
-            payload_length = len(cast(bytes, data))
-            logger.warning("skipped a wake payload of %d bytes, no valid UTF-8", payload_length)
-            return None
+        return Wake(self._redis.get_encoder().decode(message["data"], force=True))
