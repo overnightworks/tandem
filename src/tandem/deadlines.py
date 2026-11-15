@@ -87,18 +87,14 @@ class Due:
     claim: str  # fresh random token of this claim
 
 
-class Deadlines:
-    def __init__(self, redis: Client, *, key_prefix: str, kind: str, claim_for: timedelta) -> None:
-        """The deadlines of one `kind` in the app of `key_prefix`; a claim holds for `claim_for`.
+class DeadlineQueue:
+    """The deadline transitions over any three keys; `Deadlines` names them by `kind`, `Leases`
+    uses them for its lapse queue."""
 
-        `key_prefix` and `kind` are each one segment (`checked_segment`); the claim's length must be
-        positive.
-        """
-        if not isinstance(claim_for, timedelta) or claim_for <= timedelta(0):
-            raise ValueError(f"claim_for must be a positive timedelta, got {claim_for!r}")
+    def __init__(self, redis: Client, keys: DeadlineKeys, claim_for: timedelta) -> None:
         self._redis = redis
-        self._keys = deadline_keys(key_prefix, kind)
-        self._claim_for_ms = _milliseconds(claim_for)
+        self._keys = keys
+        self._claim_for_ms = milliseconds(checked_span(claim_for, argument="claim_for"))
         self._set = Script(redis, _SET)
         self._cancel = Script(redis, _CANCEL)
         self._claim_due = Script(redis, _CLAIM_DUE)
@@ -112,7 +108,7 @@ class Deadlines:
 
     async def set(self, key: str, due_in: timedelta) -> None:
         """Make `key` come due `due_in` from now on Redis TIME; a claim on `key` is invalidated."""
-        await self._set.run(self._key_names(), [key, _milliseconds(due_in)])
+        await self._set.run(self._key_names(), [key, milliseconds(due_in)])
 
     async def cancel(self, key: str) -> bool:
         """Remove `key`, waiting or claimed; True when there was something to remove."""
@@ -154,5 +150,22 @@ class Deadlines:
         return self._redis.get_encoder().decode(value, force=True)
 
 
-def _milliseconds(span: timedelta) -> int:
+class Deadlines(DeadlineQueue):
+    def __init__(self, redis: Client, *, key_prefix: str, kind: str, claim_for: timedelta) -> None:
+        """The deadlines of one `kind` in the app of `key_prefix`; a claim holds for `claim_for`.
+
+        `key_prefix` and `kind` are each one segment (`checked_segment`); the claim's length must be
+        positive.
+        """
+        super().__init__(redis, deadline_keys(key_prefix, kind), claim_for)
+
+
+def checked_span(value: timedelta, *, argument: str) -> timedelta:
+    """Return `value` when it is a positive timedelta, else raise ValueError naming the argument."""
+    if not isinstance(value, timedelta) or value <= timedelta(0):
+        raise ValueError(f"{argument} must be a positive timedelta, got {value!r}")
+    return value
+
+
+def milliseconds(span: timedelta) -> int:
     return math.ceil(span / _MILLISECOND)

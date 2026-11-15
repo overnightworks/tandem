@@ -1,9 +1,10 @@
 # tandem
 
-The fleet's shared Redis coordination for apps that run in several pods. Today it holds two tools. A wake
+The fleet's shared Redis coordination for apps that run in several pods. Today it holds three tools. A wake
 channel with resync: a pod that changed something tells the others which address changed, and every
 reader learns when it must re-read everything it serves. Deadlines on Redis time: a key comes due on
-Redis's own clock and reaches one claimer at a time. It builds on [redis-py](https://redis.readthedocs.io/)'s
+Redis's own clock and reaches one claimer at a time. Leases: a holder's claim to be alive, with a
+generation per start and a claim on each lapse. It builds on [redis-py](https://redis.readthedocs.io/)'s
 asyncio client. The reader is the developer who wires a host in.
 
 Distribution `overnightworks-tandem`, import package `tandem`.
@@ -30,7 +31,7 @@ from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
 
-from tandem import Deadlines, Resubscribed, StoreError, Wake, WakeChannel
+from tandem import Deadlines, Lapse, Leases, Liveness, Resubscribed, StoreError, Wake, WakeChannel
 
 # The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1).
 # The timeouts let `publish` fail on a Redis that stays silent (see the publish row).
@@ -71,6 +72,32 @@ async def expire_seats(served: Served) -> None:
     for due in await deadlines.claim_due(claimer="pod-3", limit=20):
         await served.expire(seat=due.key, fence=due.claim)  # the host fences its own effect
         await deadlines.done(due)
+
+
+leases = Leases(
+    redis,
+    key_prefix="skat",
+    family="agents",
+    lasts=timedelta(seconds=30),
+    claim_for=timedelta(seconds=60),
+)
+
+
+async def run_agent(agent: Agent) -> None:
+    async with leases.kept(agent.id, every=timedelta(seconds=10)) as hold:
+        await agent.run(fence=hold.generation)  # the host fences with the generation it stored
+
+
+async def free_lapsed_agents(served: Served) -> None:
+    async def free(lapse: Lapse) -> None:
+        await served.free(agent=lapse.holder, fence=lapse.generation)
+
+    await leases.serve_lapses(free, claimer="pod-3", every=timedelta(seconds=5))  # runs until cancelled
+
+
+async def agents_gone(served: Served) -> list[str]:
+    states = await leases.liveness(served.known_agents())
+    return [agent for agent, state in states.items() if state is Liveness.GONE]
 ```
 
 ## The API
@@ -92,6 +119,18 @@ async def expire_seats(served: Served) -> None:
 | `Due(key, claim)` | One claim: the deadline's key and its token. |
 | `deadlines.keys` | The `DeadlineKeys` (`due`, `claimed`, `claim`), the three key names of the kind, for a caller's script that runs `LUA_KIT`'s transitions on them. A script gets them as `KEYS` in the order `due`, `claimed`, `claim` (`[keys.due, keys.claimed, keys.claim]`) and builds the `keys` table of `LUA_KIT` with `local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}`. |
 | `Script(redis, source)` | A caller's Lua, run after `LUA_KIT`. `await script.run(keys, args)` runs it by its SHA, loads it again after `NOSCRIPT` and returns Redis's raw reply; every Redis failure raises `StoreError`. The host client's `Retry` governs a lost connection and can run the script again after a lost reply; tandem adds no retry. Redis does not roll a script back: a script that fails after a write keeps the write, so it checks before it writes. `LUA_KIT` is prepended to `source`, so an error's line number is offset by the kit's lines, and a `#!lua` shebang cannot be used. |
+| `Leases(redis, *, key_prefix, family, lasts, claim_for)` | The leases of one `family` of one app. A lease lasts `lasts` after its latest renewal; a claim on a lapse holds for `claim_for`. `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` and `claim_for` are positive `timedelta`s; anything else raises `ValueError` naming the argument. A holder is any string. |
+| `await leases.renew(holder)` | Keeps the lease of `holder` for another `lasts` on Redis `TIME` and returns a `Renewal`. A lease that is not live (never started, ended, or expired) starts anew under a fresh random 128-bit generation with `started=True`; exactly one of several concurrent renewals sees it. |
+| `await leases.end(holder, generation)` | Ends the live lease of `generation` at once and queues its lapse as due now. False, and nothing changes, when `generation` is not the holder's current one or the lease is no longer live. |
+| `await leases.liveness(holders)` | A `dict` from each holder to `Liveness`. ALIVE while its lease is live; otherwise UNKNOWN until `lasts` have passed since the app's epoch, then GONE. The epoch is the Redis time of the first command of any pod after Redis lost its data, so a restart reads UNKNOWN, not GONE, for `lasts`; a host reconciles after the restart. An empty collection returns `{}` without a Redis call. |
+| `await leases.live()` | A `Roster(holders, settled)`, read in one script: every live holder, and whether `lasts` have passed since the epoch. A roster that is not `settled` may miss holders that a restart took. |
+| `leases.kept(holder, *, every)` | An async context manager that renews `holder` once before the block runs, then every `every`, and ends the lease at exit. It yields a `Hold` whose `generation` follows each renewal, so a holder that lapsed and started again shows the new one. `every` is a positive `timedelta` below `lasts`, or it raises `ValueError` naming `every`. A `StoreError` of the first renewal raises out of the entry; a failed later renewal is logged and retried, never ends the block. At exit an in-flight renewal completes, then the current generation is ended, shielded from cancellation. |
+| `await leases.serve_lapses(handle, *, claimer, every)` | Runs until cancelled. Each `every` it sweeps expired leases into the lapse queue and claims the due lapses in small batches until none is due, and calls `await handle(lapse)` for each, at least once. While `handle` runs its claim is extended every `claim_for / 3`; a failed extension is logged and stops, and `handle` is never cancelled. `done` follows a `handle` that returns; one that raises is logged and its lapse returns to a claimer when its claim runs out. An outage of Redis is ridden out with the back-off of `received()`; a refusal raises `StoreError`. |
+| `Renewal(started, generation)` | The result of `renew`. |
+| `Lapse(holder, generation, due)` | A lease that ended or expired, with the generation it had. |
+| `Roster(holders, settled)` | The result of `live`. |
+| `Hold(generation)` | What `kept` yields. |
+| `Liveness` | `ALIVE`, `GONE` or `UNKNOWN`. |
 | `Client` | The type of the Redis client tandem takes, for a host's own parameter. |
 | `LUA_KIT` | Lua that defines the table `tandem`; `Script` prepends it. `keys` below is a table with the fields `due`, `claimed` and `claim`, built from the script's `KEYS` as above. |
 | `tandem.now_ms()` | Redis `TIME` in milliseconds. |
@@ -102,6 +141,12 @@ async def expire_seats(served: Served) -> None:
 | `wake_channel(key_prefix)` | The name of the wake channel, for `tandem.wake`. |
 | `DeadlineKeys` | The record `deadlines.keys` returns. |
 | `StoreError` | Redis refused or timed out; the cause is chained. |
+
+The leases of a family live in `<key_prefix>:tandem:v1:l:<family>:expiry` and `...:generation`, its lapse
+queue in `...:l:<family>:lapse:{due,claimed,claim}` and the app's epoch in `<key_prefix>:tandem:v1:epoch`,
+disjoint from the channel and the deadlines. Only the expiry decides ALIVE: a lapse that a handler claimed
+reads GONE, or UNKNOWN until `lasts` have passed since the epoch, and a `renew` after it starts a new
+generation.
 
 The channel is `<key_prefix>:tandem:v1:wake`: one channel per key prefix, so every pod that follows the
 same channel uses the same `key_prefix`. An app may run several `WakeChannel`s on one Redis under distinct
@@ -123,7 +168,7 @@ reply is lost to a retry of the host's client expires after `claim_for` and then
 ## The host's duties
 
 Redis pub/sub delivers a wake to the readers subscribed at that moment and keeps nothing. Three duties
-close that gap, and two more cover deadlines:
+close that gap, two more cover deadlines and four cover leases:
 
 1. **Re-read everything the pod serves at each `Resubscribed`.** A wake sent while the pod was
    disconnected is gone for good; the `Resubscribed` after the reconnect is the signal that anything may
@@ -144,6 +189,18 @@ close that gap, and two more cover deadlines:
 5. **Reconcile the deadlines after a Redis restart.** A restart takes every pending deadline and every claim
    with it. The host derives what its durable state needs (the deadlines it guards) and `set`s them again
    at start and after it notices a restart, for example at a `Resubscribed`.
+6. **One `holder` per process.** Two processes that renew the same holder share one lease and one
+   generation, and neither notices the other's death.
+7. **The same `lasts` and `claim_for` for every pod of a family.** The lease and the claim are measured by
+   the pod that reads them; pods that differ read each other's leases and claims by their own span.
+8. **Treat a generation that differs from the stored one as the start.** A reply lost under the client's
+   `Retry` can replay `renew` as `started=False`, so a host compares the generation with the one it stored
+   instead of trusting `started`. It fences its effects with that generation, checked in the same atomic
+   step as the write (a generation is random and compared only by equality).
+9. **Reconcile after a Redis restart.** A restart takes every lease, lapse and claim with it: a lapse in
+   flight is never delivered, and an absent lease reads UNKNOWN for `lasts` and then GONE. The host
+   re-derives what it must free from its durable state, at its reconcile period, and reads GONE as the
+   signal that nobody renews.
 
 ## Fleet standard: cross-pod coordination in Redis
 
@@ -153,7 +210,7 @@ transaction, such as skat's chair holds.
 
 New code coordinates through tandem at once. An existing copy moves to tandem now, as soon as the tandem
 release that ships its primitive exists. The move runs as one fleet-program item with a sub-issue in each
-covered repository. Today tandem ships the wake channel and deadlines; leases join with their release.
+covered repository. Today tandem ships the wake channel, deadlines and leases.
 
 A deviation is a request naming its enduring harm. tandem's head reviews it, only the operator rules it,
 and the ruling is recorded in this section; the process is marketplace's
@@ -166,6 +223,13 @@ and the ruling is recorded in this section; the process is marketplace's
   fail a silent pub/sub read.
 - Delivery is at most once per subscription; duty 1 and duty 2 make the host's state converge anyway.
 - A deadline is as durable as the Redis behind it; duty 5 covers a restart.
+- A lease, its lapse and a claim are as durable as the Redis behind them; duty 9 covers a restart.
+  The clock is Redis's: a step of it moves every expiry with it.
+- A lapse whose handler always raises returns to a claimer every `claim_for`.
+- A family without `serve_lapses` keeps its lapse queue until the next Redis restart.
+- A paused holder lapses after `lasts` and its next `renew` starts a new generation; its stale effects are
+  refused only by the host's own fence.
+- A generation is 128 random bits, so two starts collide with a negligible probability.
 
 ## Versioning
 

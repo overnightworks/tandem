@@ -8,7 +8,8 @@ from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
 
-from tandem import Wake, WakeChannel, wake
+from tandem import Wake, WakeChannel
+from tandem.errors import BACKOFF_CAP_SECONDS, BACKOFF_FIRST_SECONDS
 from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.host import ScenarioHost
 from tests.support.proxy import TcpProxy
@@ -92,7 +93,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
         await publisher.publish("next")
         assert await reader.next_wake() == Wake("next")
         assert reader.drain() == []
-    first, cap = wake.BACKOFF_FIRST_SECONDS, wake.BACKOFF_CAP_SECONDS
+    first, cap = BACKOFF_FIRST_SECONDS, BACKOFF_CAP_SECONDS
     assert backoffs.delays[0] == first
     assert max(backoffs.delays) == cap
     assert all(

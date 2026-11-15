@@ -11,13 +11,10 @@ from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
 
 from tandem.client import Client
-from tandem.errors import store_error
+from tandem.errors import BACKOFF_FIRST_SECONDS, is_outage, next_backoff, store_error
 from tandem.keys import wake_channel
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-BACKOFF_FIRST_SECONDS = 0.5
-BACKOFF_CAP_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -90,16 +87,13 @@ class WakeChannel:
                 # connection unusable: the subscription is established again, with a Resubscribed.
                 self._log_skipped_payload(error)
                 continue
-            except (redis_errors.AuthenticationError, redis_errors.AuthorizationError) as error:
-                raise store_error(f"subscribe to {self._channel}", error) from error
-            except redis_errors.ConnectionError, redis_errors.TimeoutError:
-                pass
             except redis_errors.RedisError as error:
-                raise store_error(f"subscribe to {self._channel}", error) from error
+                if not is_outage(error):
+                    raise store_error(f"subscribe to {self._channel}", error) from error
             finally:
                 await self._close(pubsub)
             await self._wait(backoff)
-            backoff = min(backoff * 2, BACKOFF_CAP_SECONDS)
+            backoff = next_backoff(backoff)
 
     async def _next_event(self, pubsub: PubSub) -> Wake | Resubscribed:
         while True:

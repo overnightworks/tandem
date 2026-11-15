@@ -10,7 +10,7 @@ from fakeredis import FakeAsyncRedis, FakeServer
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 
-from tandem import Client, Deadlines
+from tandem import Client, Deadlines, Leases
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.proxy import TcpProxy
@@ -42,6 +42,24 @@ def new_deadlines(key_prefix: str) -> Callable[..., Deadlines]:
         client: Client, *, kind: str = "work", claim_for: timedelta = timedelta(seconds=30)
     ) -> Deadlines:
         return Deadlines(client, key_prefix=key_prefix, kind=kind, claim_for=claim_for)
+
+    return build
+
+
+@pytest.fixture
+def new_leases(key_prefix: str) -> Callable[..., Leases]:
+    """Leases of one family under the test's prefix; every call with the same family shares them."""
+
+    def build(
+        client: Client,
+        *,
+        family: str = "owner",
+        lasts: timedelta = timedelta(seconds=30),
+        claim_for: timedelta = timedelta(seconds=30),
+    ) -> Leases:
+        return Leases(
+            client, key_prefix=key_prefix, family=family, lasts=lasts, claim_for=claim_for
+        )
 
     return build
 

@@ -40,3 +40,27 @@ def deadline_keys(key_prefix: str, kind: str) -> DeadlineKeys:
         f"{checked_segment(kind, argument='kind')}"
     )
     return DeadlineKeys(due=f"{base}:due", claimed=f"{base}:claimed", claim=f"{base}:claim")
+
+
+@dataclass(frozen=True)
+class LeaseKeys:
+    """The keys of one lease family: the app's epoch, the expiry ZSET, the generation HASH and the
+    lapse queue, which is a deadline kind of its own."""
+
+    epoch: str
+    expiry: str
+    generation: str
+    lapse: DeadlineKeys
+
+
+def lease_keys(key_prefix: str, family: str) -> LeaseKeys:
+    """The keys of the leases of `family` in the app that owns `key_prefix`."""
+    app = f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1"
+    base = f"{app}:l:{checked_segment(family, argument='family')}"
+    lapse = f"{base}:lapse"
+    return LeaseKeys(
+        epoch=f"{app}:epoch",
+        expiry=f"{base}:expiry",
+        generation=f"{base}:generation",
+        lapse=DeadlineKeys(due=f"{lapse}:due", claimed=f"{lapse}:claimed", claim=f"{lapse}:claim"),
+    )
