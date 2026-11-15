@@ -1,0 +1,8 @@
+claim_id = "21310ad0432e47c4b0eb455b7f86503b"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "0e0ada6725368ca8d5af477960f49d94a3999681"
+branch = "claude/issue-26-redis-py-from-5-3"
+scope = ["README.md", "docs", "pyproject.toml", "src/tandem/__init__.py", "tests", "uv.lock"]
+opened_commit = "f581a49d9bed424716989a805c1d936fdcf988c5"
+whole_reason = "The floor, the test client that proves it, the host duty it adds and the version raise are one patch."
