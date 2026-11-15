@@ -1,0 +1,19 @@
+# Redis is tandem's one runtime dependency and the test tools are dev-only: tandem imports none of
+# them. quality's CI gate checks the contract over the real import graph.
+[importlinter]
+include_external_packages = True
+root_packages =
+    tandem
+
+[importlinter:contract:tandem-imports-no-test-tool]
+name = tandem imports no test-only dependency
+type = forbidden
+source_modules =
+    tandem
+forbidden_modules =
+    fakeredis
+    lupa
+    pytest
+    pytest_asyncio
+    pytest_cov
+    xdist
