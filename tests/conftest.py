@@ -118,7 +118,7 @@ async def backend(
                 redis_url, decode_responses=decode_responses
             ),
             publisher_with_outage=lambda: (
-                make_client(f"redis://127.0.0.1:{proxy.port}"),
+                make_client(proxy.url),
                 _ProxyOutage(proxy),
             ),
         )

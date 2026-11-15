@@ -51,7 +51,7 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
     held_backoffs: Backoffs,
 ):
     tasks_before = asyncio.all_tasks()
-    client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 0))
+    client = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=held_backoffs)
     async with Reader(channel) as reader:
         await reader.next_resubscribed()

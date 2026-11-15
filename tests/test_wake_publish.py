@@ -16,9 +16,7 @@ async def _publisher_through(
     proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str
 ) -> WakeChannel:
     """A publisher whose connection is open and whose failures surface at once, as a timeout."""
-    client = make_client(
-        f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 0), socket_timeout=0.3
-    )
+    client = make_client(proxy.url, retry=Retry(NoBackoff(), 0), socket_timeout=0.3)
     await client.ping()
     return WakeChannel(client, key_prefix=key_prefix)
 
@@ -65,9 +63,7 @@ async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wak
 async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_again(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
-    retrying = make_client(
-        f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 3), socket_timeout=0.3
-    )
+    retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
     await retrying.ping()
     publisher = WakeChannel(retrying, key_prefix=key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:

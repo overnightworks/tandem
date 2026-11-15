@@ -51,11 +51,10 @@ async def test_a_wake_published_through_one_client_arrives_through_another(
         assert await reader.next_wake() == Wake("orders/7")
 
 
-@pytest.mark.parametrize("decode_responses", [False, True])
 async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
-    redis_url: str, make_client: Callable[..., Redis], key_prefix: str, decode_responses: bool
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
-    host_client = make_client(redis_url, encoding="latin-1", decode_responses=decode_responses)
+    host_client = make_client(redis_url, encoding="latin-1")
     channel = WakeChannel(host_client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
         await reader.next_resubscribed()

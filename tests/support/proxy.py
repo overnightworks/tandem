@@ -35,6 +35,10 @@ class TcpProxy:
         assert self._server is not None
         return self._server.sockets[0].getsockname()[1]
 
+    @property
+    def url(self) -> str:
+        return f"redis://127.0.0.1:{self.port}"
+
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
 

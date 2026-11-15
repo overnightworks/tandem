@@ -66,7 +66,7 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
     key_prefix: str,
     backoffs: Backoffs,
 ):
-    reader_client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=disruption.retry)
+    reader_client = make_client(proxy.url, retry=disruption.retry)
     reader_channel = BackoffRecordingChannel(
         reader_client, key_prefix=key_prefix, backoffs=backoffs
     )
