@@ -33,9 +33,13 @@ local lasts_ms = tonumber(ARGV[1])
 local now_ms = tandem.now_ms()
 local settled = tandem.epoch_settled(epoch_key, now_ms, lasts_ms)
 
-local function alive(holder)
+-- The expiry in ms of the holder's live lease, else false.
+local function live_until(holder)
   local expires_ms = redis.call('ZSCORE', expiry, holder)
-  return expires_ms and tonumber(expires_ms) > now_ms
+  if expires_ms and tonumber(expires_ms) > now_ms then
+    return tonumber(expires_ms)
+  end
+  return false
 end
 
 -- The holder's generation leaves its HASH and enters the lapse queue, due now.
@@ -53,7 +57,7 @@ _RENEW = (
     _PRELUDE
     + """
 local holder = ARGV[2]
-if alive(holder) then
+if live_until(holder) then
   redis.call('ZADD', expiry, now_ms + lasts_ms, holder)
   return {0, redis.call('HGET', generations, holder)}
 end
@@ -69,7 +73,7 @@ _END = (
     _PRELUDE
     + """
 local holder = ARGV[2]
-if redis.call('HGET', generations, holder) ~= ARGV[3] or not alive(holder) then
+if redis.call('HGET', generations, holder) ~= ARGV[3] or not live_until(holder) then
   return 0
 end
 redis.call('ZREM', expiry, holder)
@@ -78,18 +82,20 @@ return 1
 """
 )
 
-# ARGV: holders. One reply per holder: 1 alive, 2 unknown, 0 gone.
-_LIVENESS = (
+# ARGV: holders. One reply per holder: {1, generation, ms left} alive, {2} unknown, {0} gone.
+_STATE = (
     _PRELUDE
     + """
 local reply = {}
 for index = 2, #ARGV do
-  if alive(ARGV[index]) then
-    reply[#reply + 1] = 1
+  local holder = ARGV[index]
+  local expires_ms = live_until(holder)
+  if expires_ms then
+    reply[#reply + 1] = {1, redis.call('HGET', generations, holder), expires_ms - now_ms}
   elseif settled then
-    reply[#reply + 1] = 0
+    reply[#reply + 1] = {0}
   else
-    reply[#reply + 1] = 2
+    reply[#reply + 1] = {2}
   end
 end
 return reply
@@ -129,6 +135,15 @@ class Liveness(StrEnum):
 
 
 _LIVENESS_OF_REPLY = {0: Liveness.GONE, 1: Liveness.ALIVE, 2: Liveness.UNKNOWN}
+
+
+@dataclass(frozen=True)
+class LeaseState:
+    liveness: (
+        Liveness  # ALIVE while the lease is live, GONE, UNKNOWN when a restart may have lost it
+    )
+    generation: str | None  # the lease's, while ALIVE; a value that can end the lease
+    remaining: timedelta | None  # until the lease expires, while ALIVE
 
 
 @dataclass(frozen=True)
@@ -201,7 +216,7 @@ class Leases:
         self._lapses = DeadlineQueue(redis, self._keys.lapse, claim_for)
         self._renew = Script(redis, _RENEW)
         self._end = Script(redis, _END)
-        self._liveness = Script(redis, _LIVENESS)
+        self._state = Script(redis, _STATE)
         self._live = Script(redis, _LIVE)
         self._sweep = Script(redis, _SWEEP)
 
@@ -223,15 +238,19 @@ class Leases:
         reply = await self._end.run(self._key_names(), self._arguments(holder, generation))
         return reply == 1
 
-    async def liveness(self, holders: Collection[str]) -> dict[str, Liveness]:
-        """Whether each of `holders` is ALIVE, GONE, or UNKNOWN right after a Redis restart."""
+    async def state(self, holders: Collection[str]) -> dict[str, LeaseState]:
+        """The state of each of `holders`, read in one script; it renews and starts nothing.
+
+        A holder is ALIVE with its generation and the time left, GONE, or UNKNOWN right after a
+        Redis restart. A generation lets `end` the lease: an app keeps it to itself.
+        """
         if not holders:
             return {}
         names = list(holders)
-        reply = await self._liveness.run(self._key_names(), self._arguments(*names))
+        reply = await self._state.run(self._key_names(), self._arguments(*names))
         return {
-            name: _LIVENESS_OF_REPLY[cast(int, state)]
-            for name, state in zip(names, cast(list[object], reply), strict=True)
+            name: self._lease_state(cast(list[object], held))
+            for name, held in zip(names, cast(list[object], reply), strict=True)
         }
 
     async def live(self) -> Roster:
@@ -365,6 +384,15 @@ class Leases:
                 if not kept:
                     logger.warning("the claim of the lapse of %s ran out", due.key)
                     pending.discard(due)
+
+    def _lease_state(self, reply: list[object]) -> LeaseState:
+        liveness = _LIVENESS_OF_REPLY[cast(int, reply[0])]
+        if liveness is not Liveness.ALIVE:
+            return LeaseState(liveness, None, None)
+        _, generation, remaining_ms = reply
+        return LeaseState(
+            liveness, self._text(generation), timedelta(milliseconds=cast(int, remaining_ms))
+        )
 
     def _key_names(self) -> list[str]:
         keys, lapse = self._keys, self._keys.lapse

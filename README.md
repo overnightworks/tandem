@@ -107,8 +107,8 @@ async def free_lapsed_agents(served: Served) -> None:
 
 
 async def agents_gone(served: Served) -> list[str]:
-    states = await leases.liveness(served.known_agents())
-    return [agent for agent, state in states.items() if state is Liveness.GONE]
+    states = await leases.state(served.known_agents())
+    return [agent for agent, state in states.items() if state.liveness is Liveness.GONE]
 
 
 locks = Locks(redis, key_prefix="skat", family="gpu", lasts=timedelta(seconds=15))
@@ -149,7 +149,7 @@ async def train_on_gpu(job: Job) -> None:
 | `Leases(redis, *, key_prefix, family, lasts, claim_for)` | The leases of one `family` of one app. A lease lasts `lasts` after its latest renewal; a claim on a lapse holds for `claim_for`. `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` and `claim_for` are positive `timedelta`s; anything else raises `ValueError` naming the argument. A holder is any string. |
 | `await leases.renew(holder)` | Keeps the lease of `holder` for another `lasts` on Redis `TIME` and returns a `Renewal`. A lease that is not live (never started, ended, or expired) starts anew under a fresh random 128-bit generation with `started=True`; exactly one of several concurrent renewals sees it. |
 | `await leases.end(holder, generation)` | Ends the live lease of `generation` at once and queues its lapse as due now. False, and nothing changes, when `generation` is not the holder's current one or the lease is no longer live. |
-| `await leases.liveness(holders)` | A `dict` from each holder to `Liveness`. ALIVE while its lease is live; otherwise UNKNOWN until `lasts` have passed since the app's epoch, then GONE. The epoch is the Redis time of the first command of any pod after Redis lost its data, so a restart reads UNKNOWN, not GONE, for `lasts`; a host reconciles after the restart. An empty collection returns `{}` without a Redis call. |
+| `await leases.state(holders)` | A `dict` from each holder to a `LeaseState(liveness, generation, remaining)`, read in one script that renews and starts nothing. ALIVE while its lease is live, with its `generation` and the `remaining` time; otherwise UNKNOWN until `lasts` have passed since the app's epoch, then GONE, and `generation` and `remaining` are None. The epoch is the Redis time of the first command of any pod after Redis lost its data, so a restart reads UNKNOWN, not GONE, for `lasts`; a host reconciles after the restart. A host that did not start the lease reads its generation here, for example to accept an add under the agent's current generation and later end only what that generation made on a `Lapse`. An empty collection returns `{}` without a Redis call. |
 | `await leases.live()` | A `Roster(holders, settled)`, read in one script: every live holder, and whether `lasts` have passed since the epoch. A roster that is not `settled` may miss holders that a restart took. |
 | `leases.kept(holder, *, every)` | An async context manager that renews `holder` once before the block runs, then every `every`, and ends the lease at exit. It yields a `Hold` whose `generation` follows each renewal, so a holder that lapsed and started again shows the new one. `every` is a positive `timedelta` below `lasts`, or it raises `ValueError` naming `every`. A `StoreError` of the first renewal raises out of the entry; a failed later renewal is logged and retried, never ends the block. At exit an in-flight renewal completes, then the current generation is ended, shielded from cancellation. |
 | `await leases.serve_lapses(handle, *, claimer, every)` | Runs until cancelled. Each `every` it sweeps expired leases into the lapse queue and claims the due lapses in small batches until none is due, and calls `await handle(lapse)` for each, at least once. While `handle` runs its claim is extended every `claim_for / 3`; a failed extension is logged and stops, and `handle` is never cancelled. `done` follows a `handle` that returns; one that raises is logged and its lapse returns to a claimer when its claim runs out. An outage of Redis is ridden out with the back-off of `received()`; a refusal raises `StoreError`. |
@@ -163,7 +163,8 @@ async def train_on_gpu(job: Job) -> None:
 | `Lapse(holder, generation, due)` | A lease that ended or expired, with the generation it had. |
 | `Roster(holders, settled)` | The result of `live`. |
 | `Hold(generation)` | What `kept` yields. |
-| `LockState(liveness, generation, remaining)` | The result of `state`: `generation` and `remaining` are None unless ALIVE. |
+| `LeaseState(liveness, generation, remaining)` | The result of `leases.state` for one holder: `generation` and `remaining` are None unless ALIVE. |
+| `LockState(liveness, generation, remaining)` | The result of `locks.state`: `generation` and `remaining` are None unless ALIVE. |
 | `LockKeys` | The record `locks.keys` returns. |
 | `Liveness` | `ALIVE`, `GONE` or `UNKNOWN`, of a lease holder and of a lock name. |
 | `Client` | The type of the Redis client tandem takes, for a host's own parameter. |
@@ -232,8 +233,9 @@ close that gap, two more cover deadlines, four cover leases and four cover locks
 5. **Reconcile the deadlines after a Redis restart.** A restart takes every pending deadline and every claim
    with it. The host derives what its durable state needs (the deadlines it guards) and `set`s them again
    at start and after it notices a restart, for example at a `Resubscribed`.
-6. **One `holder` per process.** Two processes that renew the same holder share one lease and one
-   generation, and neither notices the other's death.
+6. **One `kept` per holder.** Several pods may renew one holder when "any of them is alive" is the
+   intended meaning: `renew` is atomic, and the lease then cannot tell them apart. A `kept` ends the shared
+   generation at its exit, so only one pod runs it.
 7. **The same `lasts` and `claim_for` for every pod of a family.** The lease and the claim are measured by
    the pod that reads them; pods that differ read each other's leases and claims by their own span.
 8. **Treat a generation that differs from the stored one as the start.** A reply lost under the client's
@@ -253,7 +255,7 @@ close that gap, two more cover deadlines, four cover leases and four cover locks
     `release` that succeeded to False.
 12. **Extend before `lasts` run out, with the same `lasts` for every pod of a family.** A holder that
     pauses past `lasts` loses its lock to the next `acquire`. The span is measured by the pod that reads it.
-13. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `state`.** `state`
+13. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`.** `locks.state`
     and the script that acts on it are two steps; a host that must refuse or write atomically with the
     lock calls `tandem.lock_state` inside that script. When it reserves by `acquire` and then reads its
     own state again, it releases the lock if that state says another claim came first.
@@ -292,6 +294,9 @@ and the ruling is recorded in this section; the process is marketplace's
   new app from a restart.
 - A lock has no forced release and no holder label: its host keeps who holds it in its own store.
 - A generation is 128 random bits, so two starts collide with a negligible probability.
+- A generation lets `end` its lease, and `leases.state` gives it to every pod of the app that reaches the
+  Redis. That widens no trust boundary, as each pod already can end any lease there, so a generation is an
+  app-internal value, never shown to a person or logged.
 
 ## Versioning
 

@@ -70,10 +70,15 @@ async def ended(task: asyncio.Task[None]) -> BaseException | None:
     return task.exception()
 
 
+async def liveness_of(leases: Leases, holder: str) -> Liveness:
+    """The liveness `state` reports for one holder."""
+    return (await leases.state([holder]))[holder].liveness
+
+
 async def until_gone(leases: Leases, holder: str) -> None:
     """Wait until `holder` reads GONE: absent, and `lasts` past since the epoch."""
 
     async def gone() -> bool:
-        return (await leases.liveness([holder]))[holder] is Liveness.GONE
+        return await liveness_of(leases, holder) is Liveness.GONE
 
     await until(gone)
