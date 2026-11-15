@@ -12,6 +12,7 @@ class Mode(Enum):
     CUT = auto()  # accepts and closes at once: the client sees a refused connection
     DROP_REQUESTS = auto()  # keeps the connection, discards what the client sends
     DROP_REPLIES = auto()  # forwards what the client sends, discards what the server answers
+    HOLD = auto()  # accepts new connections and lets them proceed only on release
 
 
 class TcpProxy:
@@ -21,6 +22,7 @@ class TcpProxy:
         self._server: asyncio.Server | None = None
         self._writers: set[asyncio.StreamWriter] = set()
         self._attempts = 0
+        self._released = asyncio.Event()
         self._attempt_seen = asyncio.Condition()
         self.tasks: set[asyncio.Task[None]] = set()
 
@@ -55,8 +57,14 @@ class TcpProxy:
     def drop_replies(self) -> None:
         self._mode = Mode.DROP_REPLIES
 
+    def hold(self) -> None:
+        """Keep every connection opened from now on waiting until `restore`."""
+        self._released = asyncio.Event()
+        self._mode = Mode.HOLD
+
     def restore(self) -> None:
         self._mode = Mode.FORWARD
+        self._released.set()
 
     async def attempts_reached(self, count: int) -> None:
         """Wait until `count` connection attempts were refused since the last cut."""
@@ -87,6 +95,8 @@ class TcpProxy:
                 self._attempts += 1
                 self._attempt_seen.notify_all()
             return
+        if self._mode is Mode.HOLD:
+            await self._released.wait()
         upstream_reader, upstream_writer = await asyncio.open_connection(*self._upstream)
         self._writers |= {client_writer, upstream_writer}
         pumps = [

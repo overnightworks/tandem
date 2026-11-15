@@ -1,14 +1,17 @@
 import asyncio
+from collections.abc import AsyncGenerator, Callable
+from typing import cast
 
 import pytest
+from redis.asyncio import Redis
 
 from tandem import Resubscribed, StoreError, Wake, WakeChannel
 from tests.support.backends import Backend
 from tests.support.reader import Reader
+from tests.support.waiting import within
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
-    """C1"""
     writer = WakeChannel(backend.new_client(), key_prefix=key_prefix)
     observer = backend.new_client()
     channel = WakeChannel(backend.new_client(), key_prefix=key_prefix)
@@ -39,7 +42,6 @@ async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend
 async def test_a_wake_published_through_one_client_arrives_through_another(
     backend: Backend, key_prefix: str
 ):
-    """C2"""
     publisher = WakeChannel(backend.new_client(), key_prefix=key_prefix)
     async with Reader(WakeChannel(backend.new_client(), key_prefix=key_prefix)) as reader:
         await reader.next_resubscribed()
@@ -50,7 +52,6 @@ async def test_a_wake_published_through_one_client_arrives_through_another(
 async def test_publish_fails_during_an_outage_and_delivers_after_it(
     backend: Backend, key_prefix: str
 ):
-    """C10"""
     subscriber_client = backend.new_client()
     publisher_client, outage = backend.publisher_with_outage()
     publisher = WakeChannel(publisher_client, key_prefix=key_prefix)
@@ -66,6 +67,26 @@ async def test_publish_fails_during_an_outage_and_delivers_after_it(
 
 @pytest.mark.parametrize("key_prefix", ["a:b", "", "Upper", "-lead", "a b", "a\n"])
 def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend, key_prefix: str):
-    """C12"""
     with pytest.raises(ValueError, match="key_prefix"):
         WakeChannel(backend.new_client(), key_prefix=key_prefix)
+
+
+async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    interval = 0.05
+    channel = WakeChannel(
+        make_client(redis_url, health_check_interval=interval), key_prefix=key_prefix
+    )
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    events = cast(AsyncGenerator[Wake | Resubscribed], channel.received())
+    try:
+        assert await within(anext(events)) == Resubscribed()
+        # The health check falls due while nobody reads; the reader's next read sends the PING.
+        await asyncio.sleep(2 * interval)
+        pending = asyncio.ensure_future(anext(events))
+        await publisher.publish("a")
+        await publisher.publish("b")
+        assert [await within(pending), await within(anext(events))] == [Wake("a"), Wake("b")]
+    finally:
+        await events.aclose()

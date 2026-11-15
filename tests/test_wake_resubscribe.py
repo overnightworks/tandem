@@ -1,0 +1,183 @@
+import asyncio
+import contextlib
+import subprocess
+import sys
+from collections.abc import Callable
+
+import pytest
+from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import ConstantBackoff, NoBackoff
+from redis.exceptions import ConnectionError as RedisConnectionError
+
+from tandem import Wake, WakeChannel, wake
+from tests.conftest import Backoffs
+from tests.support.host import ScenarioHost
+from tests.support.proxy import TcpProxy
+from tests.support.reader import Reader
+from tests.support.waiting import within
+
+
+def _through(proxy: TcpProxy) -> str:
+    return f"redis://127.0.0.1:{proxy.port}"
+
+
+async def _reader_connection_ids(observer: Redis, key_prefix: str) -> list[int]:
+    """The ids of the subscription connections that belong to this test."""
+    connections = await observer.client_list(_type="pubsub")
+    return [
+        int(connection["id"])
+        for connection in connections
+        if connection["name"].startswith(key_prefix)
+    ]
+
+
+async def test_a_killed_subscription_is_resubscribed_once_and_wakes_continue(
+    redis_url: str, make_client: Callable[..., Redis], observer: Redis, key_prefix: str
+):
+    channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    async with Reader(channel) as reader:
+        await reader.next_resubscribed()
+        (connection_id,) = await _reader_connection_ids(observer, key_prefix)
+        await observer.client_kill_filter(_id=str(connection_id))
+
+        await reader.next_resubscribed()
+        await publisher.publish("next")
+
+        assert await reader.next_wake() == Wake("next")
+        assert reader.drain() == []
+
+
+async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
+    proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str, redis_url: str
+):
+    """redis-py's own re-subscription confirms through the reader, so tandem adds no copy of it."""
+    retry = Retry(ConstantBackoff(0.05), 100)
+    client = make_client(_through(proxy), retry=retry)
+    pool, connection_settings = (
+        client.connection_pool,
+        dict(client.connection_pool.connection_kwargs),
+    )
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+        proxy.cut()
+        plain_command = asyncio.ensure_future(client.ping())
+        await proxy.attempts_reached(3)
+        proxy.restore()
+
+        assert await within(plain_command) is True
+        await reader.next_resubscribed()
+        await publisher.publish("next")
+        assert await reader.next_wake() == Wake("next")
+        assert reader.drain() == []
+    assert client.get_retry() is retry
+    assert client.connection_pool is pool
+    assert client.connection_pool.connection_kwargs == connection_settings
+
+
+async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_capped_back_offs(
+    proxy: TcpProxy,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    redis_url: str,
+    backoffs: Backoffs,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(wake, "BACKOFF_FIRST_SECONDS", 0.01)
+    monkeypatch.setattr(wake, "BACKOFF_CAP_SECONDS", 0.04)
+    client = make_client(_through(proxy), retry=Retry(NoBackoff(), 1))
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+        proxy.cut()
+        await backoffs.reached(6)
+        assert reader.running
+        proxy.restore()
+
+        await reader.next_resubscribed()
+        await publisher.publish("next")
+        assert await reader.next_wake() == Wake("next")
+        assert reader.drain() == []
+    first, cap = wake.BACKOFF_FIRST_SECONDS, wake.BACKOFF_CAP_SECONDS
+    assert backoffs.delays[0] == first
+    assert max(backoffs.delays) == cap
+    assert all(
+        later == min(earlier * 2, cap)
+        for earlier, later in zip(backoffs.delays, backoffs.delays[1:], strict=False)
+    )
+
+
+async def test_a_redis_restart_is_resubscribed_once_and_wakes_continue(
+    restartable_redis: tuple[str, str], make_client: Callable[..., Redis], key_prefix: str
+):
+    url, container = restartable_redis
+    client = make_client(url)
+    channel = WakeChannel(client, key_prefix=key_prefix)
+    async with Reader(channel) as reader:
+        await reader.next_resubscribed()
+        with contextlib.suppress(RedisConnectionError):
+            await client.execute_command("SHUTDOWN", "NOSAVE")
+        subprocess.run(["docker", "start", container], check=True, capture_output=True)
+
+        await reader.next_resubscribed()
+        await channel.publish("later")
+        assert await reader.next_wake() == Wake("later")
+        assert reader.drain() == []
+
+
+async def test_state_changed_while_disconnected_is_read_again_at_the_next_resubscribed(
+    proxy: TcpProxy,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    redis_url: str,
+    observer: Redis,
+):
+    writer_client = make_client(redis_url)
+    reader_client = make_client(_through(proxy), retry=Retry(ConstantBackoff(0.05), 100))
+    channel = WakeChannel(reader_client, key_prefix=key_prefix)
+    host = ScenarioHost(writer_client, key_prefix)
+    async with Reader(channel) as reader:
+        await host.handle(await reader.next_resubscribed())
+        proxy.cut()
+        await proxy.attempts_reached(1)
+        await host.commit("orders/7", "shipped")
+        await WakeChannel(writer_client, key_prefix=key_prefix).publish("orders/7")  # lost
+        assert host.served == {}
+        proxy.restore()
+
+        await host.handle(await reader.next_resubscribed())
+
+        assert host.served == {"orders/7": "shipped"}
+        assert reader.drain() == []
+
+
+async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str, key_prefix: str):
+
+    async def start(command: str, *address: str) -> asyncio.subprocess.Process:
+        return await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "tests.support.wake_process",
+            command,
+            redis_url,
+            key_prefix,
+            *address,
+            stdout=asyncio.subprocess.PIPE,
+        )
+
+    readers = [await start("read") for _ in range(2)]
+    try:
+        for process in readers:
+            assert process.stdout is not None
+            assert (await within(process.stdout.readline())).strip() == b"RESUBSCRIBED"
+        writer = await start("write", "shared")
+        await within(writer.wait())
+        for process in readers:
+            assert process.stdout is not None
+            assert (await within(process.stdout.readline())).strip() == b"WAKE shared"
+    finally:
+        for process in readers:
+            process.kill()
+            await process.wait()

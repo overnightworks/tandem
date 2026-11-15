@@ -2,15 +2,12 @@
 
 from redis.asyncio import Redis
 
-from tandem import Resubscribed, Wake, WakeChannel
+from tandem import Resubscribed, Wake
 
 
-class TestHost:
-    __test__ = False
-
-    def __init__(self, redis: Redis, channel: WakeChannel, key_prefix: str) -> None:
+class ScenarioHost:
+    def __init__(self, redis: Redis, key_prefix: str) -> None:
         self._redis = redis
-        self._channel = channel
         self._truth_key = f"{key_prefix}:truth"
         self.served: dict[str, str] = {}
 

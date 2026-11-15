@@ -1,6 +1,7 @@
+import asyncio
 import os
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -10,6 +11,7 @@ from redis.asyncio.retry import Retry
 
 from tests.support.backends import Backend
 from tests.support.proxy import TcpProxy
+from tests.support.waiting import BOUND_SECONDS
 
 
 def _required_url(variable: str) -> str:
@@ -45,8 +47,17 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
     """Clients named after the test, so CLIENT LIST finds exactly this test's connections."""
     made: list[Redis] = []
 
-    def make(url: str, *, retry: Retry | None = None, socket_timeout: float | None = None) -> Redis:
-        options: dict[str, Any] = {"socket_timeout": socket_timeout}
+    def make(
+        url: str,
+        *,
+        retry: Retry | None = None,
+        socket_timeout: float | None = None,
+        health_check_interval: float = 0,
+    ) -> Redis:
+        options: dict[str, Any] = {
+            "socket_timeout": socket_timeout,
+            "health_check_interval": health_check_interval,
+        }
         if retry is not None:
             options["retry"] = retry
         client = Redis.from_url(url, client_name=f"{key_prefix}-{len(made)}", **options)
@@ -61,7 +72,7 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
 @pytest.fixture
 async def observer(redis_url: str) -> AsyncIterator[Redis]:
     """A client for reading server state; its connection carries no test name."""
-    client = Redis.from_url(redis_url)
+    client = Redis.from_url(redis_url, decode_responses=True)
     yield client
     await client.aclose()
 
@@ -118,3 +129,66 @@ async def backend(
     )
     for fake in fakes:
         await fake.aclose()
+
+
+class Backoffs:
+    """The delays tandem asked `asyncio.sleep` for, in order."""
+
+    def __init__(self) -> None:
+        self.delays: list[float] = []
+        self._changed = asyncio.Condition()
+
+    async def record(self, delay: float) -> None:
+        async with self._changed:
+            self.delays.append(delay)
+            self._changed.notify_all()
+
+    async def reached(self, count: int) -> None:
+        async with asyncio.timeout(BOUND_SECONDS):
+            async with self._changed:
+                await self._changed.wait_for(lambda: len(self.delays) >= count)
+
+
+@pytest.fixture
+def backoffs(monkeypatch: pytest.MonkeyPatch) -> Backoffs:
+    """Records the back-offs tandem waits; the retries of the test clients wait zero."""
+    recorded = Backoffs()
+    original = asyncio.sleep
+
+    async def sleep(delay: float, *args: Any) -> Any:
+        if delay > 0:
+            await recorded.record(delay)
+        return await original(delay, *args)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    return recorded
+
+
+@pytest.fixture
+def restartable_redis() -> tuple[str, str]:
+    """The URL and container name of the server a test may shut down and restart."""
+    return (
+        _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL"),
+        _required_url("TANDEM_TEST_RESTARTABLE_REDIS_CONTAINER"),
+    )
+
+
+@pytest.fixture
+async def url_denying(
+    redis_url: str, observer: Redis, key_prefix: str
+) -> AsyncIterator[Callable[[str], Awaitable[str]]]:
+    """Builds the URL of a user of the shared server that may do everything but one command."""
+
+    async def build(command: str) -> str:
+        await observer.acl_setuser(
+            key_prefix,
+            enabled=True,
+            nopass=True,
+            commands=["+@all", f"-{command}"],
+            keys=["*"],
+            channels=["*"],
+        )
+        return redis_url.replace("redis://", f"redis://{key_prefix}@")
+
+    yield build
+    await observer.acl_deluser(key_prefix)
