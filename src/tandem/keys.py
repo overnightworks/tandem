@@ -1,6 +1,7 @@
-"""The names tandem gives in Redis: the one place a key prefix is checked and a channel is built."""
+"""The names tandem gives in Redis: the one place a key prefix is checked and a name is built."""
 
 import re
+from dataclasses import dataclass
 
 _SEGMENT = re.compile(r"[a-z0-9][a-z0-9-]*")
 
@@ -21,3 +22,21 @@ def checked_segment(value: str, *, argument: str) -> str:
 def wake_channel(key_prefix: str) -> str:
     """The wake channel of the app that owns `key_prefix`."""
     return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1:wake"
+
+
+@dataclass(frozen=True)
+class DeadlineKeys:
+    """The three keys of one deadline kind: the due ZSET, the claimed ZSET and the claim HASH."""
+
+    due: str
+    claimed: str
+    claim: str
+
+
+def deadline_keys(key_prefix: str, kind: str) -> DeadlineKeys:
+    """The keys of the deadlines of `kind` in the app that owns `key_prefix`."""
+    base = (
+        f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1:d:"
+        f"{checked_segment(kind, argument='kind')}"
+    )
+    return DeadlineKeys(due=f"{base}:due", claimed=f"{base}:claimed", claim=f"{base}:claim")

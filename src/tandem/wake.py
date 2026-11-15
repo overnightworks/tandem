@@ -7,11 +7,11 @@ from contextlib import suppress
 from dataclasses import dataclass
 
 from redis import exceptions as redis_errors
-from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
 
-from tandem.errors import StoreError
+from tandem.client import Client
+from tandem.errors import store_error
 from tandem.keys import wake_channel
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ class Resubscribed:
 
 
 class WakeChannel:
-    def __init__(self, redis: Redis, *, key_prefix: str) -> None:
+    def __init__(self, redis: Client, *, key_prefix: str) -> None:
         self._redis = redis
         self._channel = wake_channel(key_prefix)
 
@@ -64,7 +64,7 @@ class WakeChannel:
                 finally:
                     await pool.release(connection)
         except redis_errors.RedisError as error:
-            raise StoreError(f"publish to {self._channel} failed: {error}") from error
+            raise store_error(f"publish to {self._channel}", error) from error
 
     async def _send_publish(self, connection: AbstractConnection, address: str) -> None:
         await connection.send_command("PUBLISH", self._channel, address)
@@ -91,11 +91,11 @@ class WakeChannel:
                 self._log_skipped_payload(error)
                 continue
             except (redis_errors.AuthenticationError, redis_errors.AuthorizationError) as error:
-                raise StoreError(f"subscribe to {self._channel} refused: {error}") from error
+                raise store_error(f"subscribe to {self._channel}", error) from error
             except redis_errors.ConnectionError, redis_errors.TimeoutError:
                 pass
             except redis_errors.RedisError as error:
-                raise StoreError(f"subscribe to {self._channel} failed: {error}") from error
+                raise store_error(f"subscribe to {self._channel}", error) from error
             finally:
                 await self._close(pubsub)
             await self._wait(backoff)

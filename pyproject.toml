@@ -1,12 +1,12 @@
 [project]
 name = "overnightworks-tandem"
 dynamic = ["version"]
-description = "The fleet's shared Redis coordination for apps that run in several pods: a wake channel with resync"
+description = "The fleet's shared Redis coordination for apps that run in several pods: a wake channel with resync and deadlines on Redis time"
 authors = [{ name = "Flex0r (Felix Hummert)", email = "felix.hummert@gmail.com" }]
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.14"
-keywords = ["redis", "pubsub", "wake", "coordination"]
+keywords = ["redis", "pubsub", "wake", "deadlines", "coordination"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Typing :: Typed",
