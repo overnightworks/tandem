@@ -91,8 +91,11 @@ async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
     await until_gone(leases, "pod-a")
 
 
-async def test_kept_renews_while_its_body_runs(
-    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+async def test_kept_renews_while_its_body_runs_and_writes_no_line_for_a_renewal_that_succeeds(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
 ):
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS)
@@ -101,6 +104,8 @@ async def test_kept_renews_while_its_body_runs(
         two_lasts_ms = 2 * LASTS // timedelta(milliseconds=1)
         await until_redis_ms(client, await redis_ms(client) + two_lasts_ms)
         assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
+
+    assert len(log_lines.of("lease_renewal.ended", "tandem.leases")) == 1
 
 
 async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
