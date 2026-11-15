@@ -54,6 +54,31 @@ class _GatedEnd(Leases):
         return ended
 
 
+async def _exiting_at_its_gate(
+    client: Redis, key_prefix: str
+) -> tuple[_GatedEnd, asyncio.Task[None]]:
+    """A task cancelled inside `kept`, whose `end` now waits at the gate."""
+    leases = _GatedEnd(
+        client,
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+    )
+    inside = asyncio.Event()
+
+    async def body() -> None:
+        async with leases.kept("pod-a", every=EVERY):
+            inside.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(body())
+    await within(inside.wait())
+    task.cancel()
+    await within(leases.ending.wait())
+    return leases, task
+
+
 async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
@@ -200,25 +225,9 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     key_prefix: str,
     caplog: pytest.LogCaptureFixture,
 ):
-    leases = _GatedEnd(
-        make_client(await url_denying("flushall")),
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=timedelta(seconds=30),
+    leases, task = await _exiting_at_its_gate(
+        make_client(await url_denying("flushall")), key_prefix
     )
-
-    inside = asyncio.Event()
-
-    async def body() -> None:
-        async with leases.kept("pod-a", every=EVERY):
-            inside.set()
-            await asyncio.Event().wait()
-
-    task = asyncio.create_task(body())
-    await within(inside.wait())
-    task.cancel()
-    await within(leases.ending.wait())
     task.cancel()
     if end_fails:
         await observer.acl_setuser(key_prefix, commands=["-evalsha"])
@@ -238,25 +247,8 @@ async def test_cancelling_the_exit_and_its_cleanup_together_ends_the_task_cancel
     key_prefix: str,
     caplog: pytest.LogCaptureFixture,
 ):
-    leases = _GatedEnd(
-        make_client(redis_url),
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=timedelta(seconds=30),
-    )
-    inside = asyncio.Event()
-
-    async def body() -> None:
-        async with leases.kept("pod-a", every=EVERY):
-            inside.set()
-            await asyncio.Event().wait()
-
     earlier = asyncio.all_tasks()
-    task = asyncio.create_task(body())
-    await within(inside.wait())
-    task.cancel()
-    await within(leases.ending.wait())
+    _, task = await _exiting_at_its_gate(make_client(redis_url), key_prefix)
     with caplog.at_level(logging.DEBUG, logger="tandem.leases"):
         for started_since in asyncio.all_tasks() - earlier:
             started_since.cancel()
