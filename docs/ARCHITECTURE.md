@@ -46,7 +46,8 @@ Module owners in `tandem`:
   `DeadlineKeys` of a kind, the app's epoch key, the `LeaseKeys` of a family and the `LockKeys` of a
   family.
 - `testing` owns `settle_epoch`: the one helper for a host's tests, which ages the app's epoch through
-  `keys`. It imports nothing beyond `redis` and `tandem`.
+  `keys`. It imports nothing beyond `redis` and `tandem`; `tandem.__all__` lists `testing`, which makes it
+  public.
 - `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage
   (a lost connection or a timeout) or a refusal, and the back-off both loops use.
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a

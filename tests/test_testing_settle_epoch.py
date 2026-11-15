@@ -5,6 +5,7 @@ from typing import Literal
 import pytest
 from redis.asyncio import Redis
 
+import tandem
 from tandem import Leases, Liveness, Locks
 from tandem.testing import settle_epoch
 from tests.support.leases import liveness_of
@@ -40,3 +41,8 @@ async def test_an_absent_holder_reads_gone_at_once_only_after_settle_epoch(
         liveness = (await locks.state("gpu-0")).liveness
 
     assert liveness is (Liveness.GONE if settled else Liveness.UNKNOWN)
+
+
+def test_the_root_export_contract_lists_the_testing_helpers():
+    assert "testing" in tandem.__all__
+    assert tandem.testing.settle_epoch is settle_epoch

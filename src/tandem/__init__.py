@@ -1,5 +1,6 @@
 """The fleet's shared Redis coordination: wake, deadlines, leases and locks on Redis time."""
 
+from tandem import testing
 from tandem.client import Client
 from tandem.deadlines import Deadlines, Due
 from tandem.errors import StoreError
@@ -35,5 +36,6 @@ __all__ = [
     "WakeChannel",
     "__version__",
     "checked_segment",
+    "testing",
     "wake_channel",
 ]
