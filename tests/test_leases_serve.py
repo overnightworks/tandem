@@ -1,16 +1,16 @@
 import asyncio
-import logging
 import signal
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
+from logline import Outcome
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
-from tandem import Leases, Liveness, StoreError
+from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
@@ -23,6 +23,7 @@ from tests.support.leases import (
     serving,
     until_gone,
 )
+from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import until, within
 
@@ -245,36 +246,6 @@ async def test_a_claim_that_runs_out_leaves_the_handler_running(
         assert not task.done()
 
 
-async def test_a_claim_that_runs_out_is_logged_with_holder_and_family_and_never_the_generation(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    observer: Redis,
-    new_leases: Callable[..., Leases],
-    key_prefix: str,
-    caplog: pytest.LogCaptureFixture,
-):
-    client = make_client(redis_url)
-    leases = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
-    await leases.renew("pod-a")
-    generation = (await leases.state(["pod-a"]))["pod-a"].generation
-    assert generation is not None
-    running = Handled(hold=True)
-
-    async def ran_out() -> bool:
-        return "ran out" in caplog.text
-
-    with caplog.at_level(logging.WARNING, logger="tandem"):
-        async with serving(leases, running):
-            await running.received()
-            await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
-            await until(ran_out)
-            running.release()
-
-    assert "pod-a" in caplog.text
-    assert "owner" in caplog.text
-    assert generation not in caplog.text
-
-
 async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_running(
     proxy: TcpProxy,
     redis_url: str,
@@ -296,3 +267,291 @@ async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_
         running.release()
         await until_redis_ms(client, await redis_ms(client) + 300)
         assert not task.done()
+
+
+_LOGGER = "tandem.leases"
+
+
+@pytest.mark.parametrize(
+    ("raised", "level", "outcome"),
+    [(None, "info", Outcome.OK), (ValueError, "error", Outcome.FAILED)],
+)
+async def test_a_lapse_handling_writes_one_line_with_its_outcome(
+    raised: type[Exception] | None,
+    level: str,
+    outcome: Outcome,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+
+    async def handle(lapse: object) -> None:
+        if raised is not None:
+            raise raised("the handler fails")
+
+    async with serving(leases, handle):
+        (line, *_) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert line["level"] == level
+    assert line["outcome"] == outcome
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
+    assert line["duration_ms"] >= 0
+    assert line.get("error_type") == (raised.__name__ if raised else None)
+    assert ("Traceback" in line.get("exception", "")) == (raised is not None)
+
+
+def _store_error_raised_directly() -> Exception:
+    return StoreError("a refusal naming the store")
+
+
+def _store_error_behind_a_host_error() -> Exception:
+    try:
+        raise StoreError("a refusal naming the store")
+    except StoreError as refusal:
+        wrapped = ValueError("the host gave up")
+        wrapped.__cause__ = refusal
+        return wrapped
+
+
+def _store_error_inside_a_group() -> Exception:
+    return ExceptionGroup("the host's tasks failed", [StoreError("a refusal naming the store")])
+
+
+def _host_error_raised_from_another() -> Exception:
+    try:
+        try:
+            raise KeyError("the host's own failure")
+        except KeyError as first:
+            raise ValueError("the host gave up") from first
+    except ValueError as wrapped:
+        return wrapped
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type", "writes_traceback"),
+    [
+        (_store_error_raised_directly, StoreError, False),
+        (_store_error_behind_a_host_error, ValueError, False),
+        (_store_error_inside_a_group, ExceptionGroup, False),
+        (_host_error_raised_from_another, ValueError, True),
+    ],
+)
+async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is_in_it(
+    failure: Callable[[], Exception],
+    error_type: type[Exception],
+    writes_traceback: bool,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+
+    async def handle(lapse: object) -> None:
+        raise failure()
+
+    async with serving(leases, handle):
+        (line, *_) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert line["level"] == "error"
+    assert line["outcome"] == Outcome.FAILED
+    assert line["error_type"] == error_type.__name__
+    assert ("exception" in line) is writes_traceback
+    log_lines.assert_none_holds("a refusal naming the store")
+
+
+async def test_each_lapse_handling_runs_under_its_own_trace_that_ends_with_it(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+    await leases.renew("pod-b")
+    handled = Handled()
+
+    async with serving(leases, handled):
+        handling = await log_lines.await_of("lapse_handling.ended", _LOGGER, count=2)
+        rounds = await log_lines.await_of("lapse_round.ended", _LOGGER, count=2)
+
+    assert len({line["trace_id"] for line in handling}) == len(handling)
+    assert all(line["trace_id"] is not None for line in handling)
+    assert all(line["trace_id"] is None for line in rounds)
+
+
+async def test_a_round_writes_its_counts_at_info_with_work_and_at_debug_without(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+    await leases.renew("pod-b")
+
+    async def handle(lapse: Lapse) -> None:
+        if lapse.holder == "pod-a":
+            raise ValueError("the handler fails")
+
+    async def a_round_worked() -> bool:
+        return any(line["lapse_count"] for line in log_lines.of("lapse_round.ended", _LOGGER))
+
+    async with serving(leases, handle):
+        await until(a_round_worked)
+
+    rounds = log_lines.of("lapse_round.ended", _LOGGER)
+    worked = [line for line in rounds if line["lapse_count"] > 0]
+    idle = [line for line in rounds if line["lapse_count"] == 0]
+    assert idle
+    assert {(line["level"], line["failed_count"]) for line in idle} == {("debug", 0)}
+    assert worked[0]["level"] == "info"
+    assert (worked[0]["lapse_count"], worked[0]["failed_count"]) == (2, 1)
+    assert all(line["outcome"] == Outcome.OK and line["duration_ms"] >= 0 for line in rounds)
+
+
+async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
+    url_denying: Callable[[str], Awaitable[str]],
+    redis_url: str,
+    observer: Redis,
+    key_prefix: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
+    leases = new_leases(
+        make_client(await url_denying("flushall")), lasts=LASTS, claim_for=CLAIM_FOR
+    )
+    running = Handled(hold=True)
+
+    async with serving(leases, running):
+        await running.received()
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+        (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
+        await log_lines.await_of("lapse_claim.expired", _LOGGER)
+        running.release()
+
+    assert line["level"] == "warning"
+    assert line["reason"] == "refused"
+    assert line["error_type"] == StoreError.__name__
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
+    claim_events = [
+        written["event"]
+        for written in log_lines.of_logger(_LOGGER)
+        if written["event"].startswith("lapse_claim")
+    ]
+    assert claim_events == ["lapse_claim_extension.failed", "lapse_claim.expired"]
+
+
+async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expired(
+    proxy: TcpProxy,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
+    leases = new_leases(
+        make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
+    )
+    running = Handled(hold=True)
+
+    async with serving(leases, running):
+        await running.received()
+        proxy.cut()
+        (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
+        loop = asyncio.get_running_loop()
+        claim_over_at = loop.time() + 2 * CLAIM_FOR.total_seconds()
+
+        async def claim_is_over() -> bool:
+            return loop.time() >= claim_over_at
+
+        await until(claim_is_over)
+        running.release()
+
+    assert line["reason"] == "outage"
+    assert not log_lines.of("lapse_claim.expired", _LOGGER)
+
+
+async def test_a_claim_that_runs_out_is_logged_without_its_generation(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+    running = Handled(hold=True)
+
+    async with serving(leases, running):
+        (lapse,) = await running.received()
+        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        (line,) = await log_lines.await_of("lapse_claim.expired", _LOGGER)
+        running.release()
+
+    assert line["level"] == "warning"
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
+    log_lines.assert_none_holds(lapse.generation)
+
+
+async def test_an_outage_is_logged_per_failed_round_and_a_refusal_writes_no_line(
+    proxy: TcpProxy,
+    url_denying: Callable[[str], Awaitable[str]],
+    observer: Redis,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    backoffs: Backoffs,
+    log_lines: LogLines,
+):
+    await url_denying("flushall")
+    through_proxy = make_client(
+        proxy.url.replace("redis://", f"redis://{key_prefix}@"), retry=Retry(NoBackoff(), 0)
+    )
+    leases = BackoffRecordingLeases(
+        through_proxy,
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=CLAIM_FOR,
+        backoffs=backoffs,
+    )
+    task = asyncio.create_task(
+        leases.serve_lapses(Handled(), claimer="the test", every=SERVING_EVERY)
+    )
+    try:
+        proxy.cut()
+        await backoffs.reached(2)
+        proxy.restore()
+        await log_lines.await_of("lapse_round.ended", _LOGGER, count=1)
+
+        async def recovered() -> bool:
+            rounds = log_lines.of("lapse_round.ended", _LOGGER)
+            return bool(rounds) and rounds[-1]["outcome"] == Outcome.OK
+
+        await until(recovered)
+        written = len(log_lines.of_logger(_LOGGER))
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+        assert isinstance(await ended(task), StoreError)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    failed = [
+        line
+        for line in log_lines.of("lapse_round.ended", _LOGGER)
+        if line["outcome"] == Outcome.FAILED
+    ]
+    assert len(failed) >= 2
+    assert {(line["level"], line["lapse_count"]) for line in failed} == {("warning", 0)}
+    refusal_period = log_lines.of_logger(_LOGGER)[written:]
+    assert not [line for line in refusal_period if line["level"] in ("warning", "error")]

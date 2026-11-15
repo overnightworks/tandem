@@ -12,6 +12,7 @@ from tandem import Wake, WakeChannel
 from tandem.errors import BACKOFF_CAP_SECONDS, BACKOFF_FIRST_SECONDS
 from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.host import ScenarioHost
+from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 from tests.support.waiting import within
@@ -81,6 +82,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     key_prefix: str,
     redis_url: str,
     backoffs: Backoffs,
+    log_lines: LogLines,
 ):
     client = make_client(proxy.url, retry=Retry(NoBackoff(), 1))
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
@@ -96,6 +98,19 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
         await publisher.publish("next")
         assert await reader.next_wake() == Wake("next")
         assert reader.drain() == []
+    subscription = [
+        line
+        for line in log_lines.of_logger("tandem.wake")
+        if line["event"].startswith("wake_subscription.")
+    ]
+    lost = [line for line in subscription if line["event"] == "wake_subscription.lost"]
+    assert [line["event"] for line in (subscription[0], subscription[-1])] == [
+        "wake_subscription.confirmed"
+    ] * 2
+    assert len(lost) >= 6
+    assert [line["level"] for line in lost].count("warning") == 1
+    assert lost[0]["level"] == "warning"
+    assert all(line["level"] in ("warning", "debug") for line in lost)
     first, cap = BACKOFF_FIRST_SECONDS, BACKOFF_CAP_SECONDS
     assert backoffs.delays[0] == first
     assert max(backoffs.delays) == cap

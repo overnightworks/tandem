@@ -18,7 +18,9 @@ flowchart LR
 ```
 
 Outside: the host, which owns its state, its Redis client (pool, retry, timeouts) and what an address means,
-and Redis, which keeps no wake. tandem imports only `redis`; an import contract keeps test tools out of it.
+and Redis, which keeps no wake. tandem imports only `redis` and `logline`; an import contract keeps test
+tools out of it. logline is the fleet's logger, a second runtime dependency: a version range by name in
+tandem, whose tag the host pins.
 
 ## 2. Building Block View
 
@@ -28,10 +30,10 @@ Module owners in `tandem`:
   each `received()`, the translation of Redis's messages into events and the back-off loop around them.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
-- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end, state, live
-  and sweep scripts and the loops of `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of
-  `deadlines` (the transitions of `Deadlines` over any three keys), so a lapse is claimed, extended and
-  finished by the same scripts as a deadline.
+- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end,
+  state, live and sweep scripts and the loops of `kept` and `serve_lapses`. Its log lines are described under
+  Crosscutting Concepts. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of `Deadlines`
+  over any three keys), so a lapse is claimed, extended and finished by the same scripts as a deadline.
 - `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations,
   which it generates in Python. It shares the app's epoch and `Liveness` with `leases`, and has no lapse
   queue.
@@ -47,9 +49,10 @@ Module owners in `tandem`:
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
   reader that steps through events, and a minimal host.
 
-`wake` and `script` use `client` and `errors`; `deadlines` uses `script` and `keys`; `leases` uses `deadlines`, `script`,
-`keys` and `errors`; `locks` uses `deadlines` (its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`. Anything
-that is the name of a Redis key or channel is built in `keys`.
+`wake` and `script` use `client` and `errors` (`wake`, `leases` and `locks` also use `logline`); `deadlines`
+uses `script` and `keys`; `leases` uses `deadlines`, `script`, `keys` and `errors`; `locks` uses `deadlines`
+(its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`. Anything that is the name
+of a Redis key or channel is built in `keys`.
 
 ## 3. Runtime View
 
@@ -143,10 +146,19 @@ surfaces as `StoreError`.
 **Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines`, `Leases`, `Locks` and `Script`, is a `StoreError`
 that says whether it was an outage or a refusal; `received()` and `serve_lapses` ride out an outage and end
 on a refusal; `kept` raises a refusal only at its first renewal, and a later failed renewal, outage or refusal,
-is logged as an error and retried at the next `every`;
+is logged as a warning and retried at the next `every`;
 `publish` says nothing of whether the wake arrived.
 `received()` survives every connection failure and ends only on cancellation or a refusal;
 a payload that is no valid UTF-8 is skipped and logged by length.
+
+**Logging.** Every log point writes through logline's event contract on a standard-library logger
+`tandem.<module>`: a literal `<noun>.<verb_past>` event, its fields in `extra=`, and logline's `StepTimer`
+for each call the host awaits. A lapse handler and a `serve_lapses` round write their own lines, because
+their levels and traceback do not fit the timer. tandem never calls `configure` or structlog: the host owns
+the process's logging, and a host without logline's `configure` keeps its handlers. The log never carries a
+generation, a lapse's key, a payload or a `StoreError`'s text: the generation is a value that can end a lease.
+Each lapse handling runs in its own trace (`unit_trace`), so its lines and the host handler's lines share a
+`trace_id`. The README lists the events; they are public.
 
 **Proof strategy.** The tests run every cell against a real Redis in a throwaway container started by
 `scripts/run_redis_tests.sh`; the cells that need an outage go through a small TCP proxy, and the cells of

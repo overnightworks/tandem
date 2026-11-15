@@ -12,7 +12,8 @@
 
 - `tandem.__version__` is the one version. It stays a plain string literal and is raised alone, in the pull request before the release.
 - A tag is never moved or re-created; a broken release gets the next patch tag. A gate refusal leaves no tag, so the release is dispatched again once its cause is gone; after a failed `tag` job, re-run the failed jobs, never all jobs.
-- Redis is the one runtime dependency; fakeredis, pytest and the other test tools are dev-only, and `.importlinter` keeps them out of `tandem`.
+- Redis and logline are the two runtime dependencies; fakeredis, pytest and the other test tools are dev-only, and `.importlinter` keeps them out of `tandem`. `pyproject.toml` declares logline as a version range by name in `[project.dependencies]` and its git tag only in the dev group (`tool.uv.sources`); the host pins the tag.
+- Every log point is a literal `<noun>.<verb_past>` event on `tandem.<module>` with its fields in `extra=`; tandem never calls logline's `configure` or structlog. The event names are public (README, "What tandem logs").
 - Every name tandem gives in Redis is built in `tandem.keys`; no other module writes a key or channel literal.
 - Tests run every cell against a real Redis through `scripts/run_redis_tests.sh`; outages go through `tests/support/proxy.py`; waits are barriers and bounded waits, never sleeps; a stimulus that is time itself waits on the loop clock through `until`. Each test uses the `key_prefix` fixture, so tests share one server in parallel. Branch coverage stays 100 %.
 - The published channel name and the `Resubscribed` ordering are a contract between pods of different releases: a change to `<prefix>:tandem:v1:wake` raises the version segment.

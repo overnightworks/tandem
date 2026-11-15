@@ -1,5 +1,7 @@
 """The one error tandem raises for a Redis that refused or timed out, and its classification."""
 
+from enum import StrEnum
+
 from redis import exceptions as redis_errors
 from redis.exceptions import RedisError
 
@@ -17,6 +19,17 @@ class StoreError(Exception):
     def __init__(self, message: str, *, outage: bool = False) -> None:
         super().__init__(message)
         self.outage = outage
+
+
+class FailureReason(StrEnum):
+    """The `reason` of a log line about a failed Redis call: the two kinds `StoreError` tells."""
+
+    OUTAGE = "outage"
+    REFUSED = "refused"
+
+
+def failure_reason(error: StoreError) -> FailureReason:
+    return FailureReason.OUTAGE if error.outage else FailureReason.REFUSED
 
 
 def is_outage(error: RedisError) -> bool:
