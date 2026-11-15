@@ -317,16 +317,32 @@ def _store_error_behind_a_host_error() -> Exception:
         return wrapped
 
 
+def _store_error_inside_a_group() -> Exception:
+    return ExceptionGroup("the host's tasks failed", [StoreError("a refusal naming the store")])
+
+
+def _host_error_raised_from_another() -> Exception:
+    try:
+        raise KeyError("the host's own failure")
+    except KeyError as first:
+        wrapped = ValueError("the host gave up")
+        wrapped.__cause__ = first
+        return wrapped
+
+
 @pytest.mark.parametrize(
-    ("failure", "error_type"),
+    ("failure", "error_type", "writes_traceback"),
     [
-        (_store_error_raised_directly, StoreError),
-        (_store_error_behind_a_host_error, ValueError),
+        (_store_error_raised_directly, StoreError, False),
+        (_store_error_behind_a_host_error, ValueError, False),
+        (_store_error_inside_a_group, ExceptionGroup, False),
+        (_host_error_raised_from_another, ValueError, True),
     ],
 )
-async def test_a_lapse_handler_that_fails_with_a_store_error_writes_a_line_without_its_text(
+async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is_in_it(
     failure: Callable[[], Exception],
     error_type: type[Exception],
+    writes_traceback: bool,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
@@ -344,7 +360,7 @@ async def test_a_lapse_handler_that_fails_with_a_store_error_writes_a_line_witho
     assert line["level"] == "error"
     assert line["outcome"] == Outcome.FAILED
     assert line["error_type"] == error_type.__name__
-    assert "exception" not in line
+    assert ("exception" in line) is writes_traceback
     log_lines.assert_none_holds("a refusal naming the store")
 
 
