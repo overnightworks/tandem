@@ -1,7 +1,0 @@
-claim_id = "c366bc8bcc464ee39ac8fd760a56722c"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "b9ea3dc0e402d08d8643c83991affc2b684bfdd2"
-branch = "claude/issue-20-pin-s6-with-barriers"
-scope = ["tests/test_leases_state.py"]
-opened_commit = "d742453ec7d9097b730f2a6ae085d3c5e2706745"
