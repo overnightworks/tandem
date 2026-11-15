@@ -16,8 +16,6 @@ from tests.support.deadlines import (
 )
 
 LATER = timedelta(seconds=60)
-LIVE_CLAIM = timedelta(seconds=30)
-SHORT_CLAIM = timedelta(milliseconds=300)
 _SET_IN_A_SCRIPT = KEYS_OF_THE_SCRIPT + "tandem.deadline_set(keys, ARGV[1], ARGV[2])"
 
 Rearm = Callable[[Redis, Deadlines, str], Awaitable[None]]
@@ -37,17 +35,24 @@ async def _claimed_key(client: Redis, deadlines: Deadlines) -> Due:
     return due
 
 
-@pytest.mark.parametrize("claim_runs_out", [False, True], ids=["live claim", "expired claim"])
+@pytest.mark.parametrize(
+    ("claim_for", "claim_runs_out"),
+    [
+        pytest.param(timedelta(seconds=30), False, id="live claim"),
+        pytest.param(timedelta(milliseconds=300), True, id="expired claim"),
+    ],
+)
 @pytest.mark.parametrize("rearm", [_rearm_through_deadlines, _rearm_through_a_script])
 async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves_it_waiting(
     redis_url: str,
     make_client: Callable[..., Redis],
     new_deadlines: Callable[..., Deadlines],
     rearm: Rearm,
+    claim_for: timedelta,
     claim_runs_out: bool,
 ):
     client = make_client(redis_url)
-    deadlines = new_deadlines(client, claim_for=SHORT_CLAIM if claim_runs_out else LIVE_CLAIM)
+    deadlines = new_deadlines(client, claim_for=claim_for)
     old = await _claimed_key(client, deadlines)
     if claim_runs_out:
         claimed = await state_of(client, deadlines, "room-1")
