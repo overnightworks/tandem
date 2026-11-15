@@ -81,14 +81,7 @@ class WakeChannel:
             try:
                 await pubsub.subscribe(self._channel)
                 while True:
-                    message = await pubsub.get_message(timeout=None)
-                    if message is None:  # the reply to redis-py's health check is no event
-                        continue
-                    try:
-                        event = self._event(message)
-                    except UnicodeDecodeError as error:
-                        self._log_skipped_payload(error)
-                        continue
+                    event = await self._next_event(pubsub)
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                     yield event
@@ -107,6 +100,16 @@ class WakeChannel:
                 await self._close(pubsub)
             await self._wait(backoff)
             backoff = min(backoff * 2, BACKOFF_CAP_SECONDS)
+
+    async def _next_event(self, pubsub: PubSub) -> Wake | Resubscribed:
+        while True:
+            message = await pubsub.get_message(timeout=None)
+            if message is None:  # the reply to redis-py's health check is no event
+                continue
+            try:
+                return self._event(message)
+            except UnicodeDecodeError as error:
+                self._log_skipped_payload(error)
 
     async def _wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
