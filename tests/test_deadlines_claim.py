@@ -22,13 +22,13 @@ async def test_a_deadline_is_claimed_once_with_a_fresh_token_and_not_before_it_i
     before_set = await redis_ms(clock)
     await setter.set("room-1", DUE_IN)
 
-    assert await claimer.claim_due(claimer="b", limit=10) == []
+    assert await claimer.claim_due(limit=10) == []
     claimed = await claim_when_due(claimer)
 
     assert await redis_ms(clock) >= before_set + 300
     assert [due.key for due in claimed] == ["room-1"]
     assert len(claimed[0].claim) >= 32
-    assert await claimer.claim_due(claimer="b", limit=10) == []
+    assert await claimer.claim_due(limit=10) == []
 
 
 async def test_a_claim_that_runs_out_passes_the_key_to_another_claimer_and_voids_the_old_token(
@@ -67,7 +67,7 @@ async def test_a_claim_that_is_extended_keeps_the_key_from_other_claimers(
     assert state is not None
     assert state[0] == "claimed"
     assert state[1] >= before_extend + 30_000
-    assert await deadlines.claim_due(claimer="other", limit=10) == []
+    assert await deadlines.claim_due(limit=10) == []
 
 
 async def test_claim_due_takes_at_most_the_limit_each_under_a_distinct_token_and_leaves_the_rest(
@@ -79,7 +79,7 @@ async def test_claim_due_takes_at_most_the_limit_each_under_a_distinct_token_and
         await deadlines.set(key, timedelta(0))
 
     first = await claim_when_due(deadlines, limit=3)
-    rest = await deadlines.claim_due(claimer="b", limit=10)
+    rest = await deadlines.claim_due(limit=10)
 
     assert len(first) == 3
     assert len({due.claim for due in first}) == 3
@@ -94,4 +94,4 @@ async def test_claim_due_without_room_for_a_claim_fails_loud(
     deadlines = new_deadlines(backend.new_client())
 
     with pytest.raises(ValueError, match="limit"):
-        await deadlines.claim_due(claimer="b", limit=limit)
+        await deadlines.claim_due(limit=limit)

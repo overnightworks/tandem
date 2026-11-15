@@ -118,11 +118,8 @@ class Deadlines:
         """Remove `key`, waiting or claimed; True when there was something to remove."""
         return await self._cancel.run(self._key_names(), [key]) == 1
 
-    async def claim_due(self, *, claimer: str, limit: int) -> list[Due]:
-        """Claim up to `limit` keys that are due or whose claim expired, each under a fresh token.
-
-        `claimer` names the caller; tandem keeps no record of it.
-        """
+    async def claim_due(self, *, limit: int) -> list[Due]:
+        """Claim up to `limit` keys that are due or whose claim expired, each under a new token."""
         if limit < 1:
             raise ValueError(f"limit must be at least 1, got {limit!r}")
         tokens = [secrets.token_hex(_TOKEN_BYTES) for _ in range(limit)]

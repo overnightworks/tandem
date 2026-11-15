@@ -31,5 +31,5 @@ async def test_a_redis_restart_takes_every_pending_deadline_with_it(
             return False
 
     await until(answers)
-    assert await deadlines.claim_due(claimer="b", limit=10) == []
+    assert await deadlines.claim_due(limit=10) == []
     assert await state_of(client, deadlines, "room-1") is None

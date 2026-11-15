@@ -68,7 +68,7 @@ async def hold_seat(seat: str) -> None:
 
 
 async def expire_seats(served: Served) -> None:
-    for due in await deadlines.claim_due(claimer="pod-3", limit=20):
+    for due in await deadlines.claim_due(limit=20):
         await served.expire(seat=due.key, fence=due.claim)  # the host fences its own effect
         await deadlines.done(due)
 ```
@@ -86,7 +86,7 @@ async def expire_seats(served: Served) -> None:
 | `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else raises `ValueError` naming the argument. A deadline key is any string. |
 | `await deadlines.set(key, due_in)` | `key` comes due `due_in` after now on Redis `TIME` (a pod's clock is never read). A `key` that already waits is re-armed; a `key` that a claimer holds is re-armed too and the claim is void, so the claimer's later `done` returns False and leaves the new deadline. |
 | `await deadlines.cancel(key)` | Removes `key`, waiting or claimed, and voids its claim. True when there was something to remove. |
-| `await deadlines.claim_due(*, claimer, limit)` | Claims at most `limit` keys that are due, and then keys whose claim ran out, each under a fresh random 128-bit token, and returns them as `Due`s. `limit` is at least 1. tandem keeps no record of `claimer`. |
+| `await deadlines.claim_due(*, limit)` | Claims at most `limit` keys that are due, and then keys whose claim ran out, each under a fresh random 128-bit token, and returns them as `Due`s. `limit` is at least 1. |
 | `await deadlines.extend(due)` | Holds the claim for another `claim_for`. False once its token is gone or the claim ran out. |
 | `await deadlines.done(due)` | Finishes the claim and removes the key. False once its token is gone. |
 | `Due(key, claim)` | One claim: the deadline's key and its token. |
