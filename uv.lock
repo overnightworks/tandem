@@ -229,7 +229,7 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "redis", specifier = ">=8.1,<9" }]
+requires-dist = [{ name = "redis", specifier = ">=5.3,<9" }]
 
 [package.metadata.requires-dev]
 dev = [

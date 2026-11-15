@@ -9,6 +9,7 @@ import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
+from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import Client, Deadlines, Leases, Locks
 from tandem.keys import lock_keys
@@ -118,6 +119,8 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
         }
         if retry is not None:
             options["retry"] = retry
+            # redis-py 5.x retries only these; 8.x's Retry retries them anyway.
+            options["retry_on_error"] = [ConnectionError, TimeoutError]
         client = Redis.from_url(url, client_name=f"{key_prefix}-{len(made)}", **options)
         made.append(client)
         return client
