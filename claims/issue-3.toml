@@ -1,0 +1,8 @@
+claim_id = "81e4017473c644f9a31a58247f102def"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "d04f8986861a70617e4373a3feca2fc9268587eb"
+branch = "claude/issue-3-tandem-0-1-0-p1-wakechannel-and-the-repo"
+scope = [".github", ".gitignore", ".importlinter", ".python-version", "AGENTS.md", "CLAUDE.md", "LICENSE", "README.md", "docs", "pyproject.toml", "quality", "scripts", "sonar-project.properties", "src", "tests", "uv.lock"]
+opened_commit = "4f983e37607acd4d85579ebc30cee57de08baf60"
+whole_reason = "The repository's first slice: the gate needs the package to judge, and the release needs the gate, so they land together."
