@@ -1,0 +1,8 @@
+claim_id = "4377ae588f304e0b9efdccd313d254ac"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "31459b2d9e1a0a31d909197df73cda2f33a00f73"
+branch = "claude/issue-14-tandem-0-4-0-an-owner-only-hold-for-sing"
+scope = ["README.md", "docs", "pyproject.toml", "src", "tests"]
+opened_commit = "6c91208e5d801c2631a91a688d0b532a3bb033b5"
+whole_reason = "One public primitive with its scripts, keys, Lua read and docs under one owner."
