@@ -1,0 +1,8 @@
+claim_id = "8c9ec62019684813811182a907847e17"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "2f917bee352afa2c359b602206eb451f5d411678"
+branch = "claude/issue-25-settle-epoch"
+scope = ["README.md", "docs", "src/tandem", "tests"]
+opened_commit = "590beaad49208e69813a7fbeee5ae4d1b904d20f"
+whole_reason = "One public helper, its own fixture caller and its README line form one small release."
