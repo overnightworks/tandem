@@ -31,8 +31,7 @@ local epoch_key, expiry, generations = KEYS[1], KEYS[2], KEYS[3]
 local lapse = {due = KEYS[4], claimed = KEYS[5], claim = KEYS[6]}
 local lasts_ms = tonumber(ARGV[1])
 local now_ms = tandem.now_ms()
-redis.call('SET', epoch_key, now_ms, 'NX')
-local settled = now_ms - tonumber(redis.call('GET', epoch_key)) >= lasts_ms
+local settled = tandem.epoch_settled(epoch_key, now_ms, lasts_ms)
 
 local function alive(holder)
   local expires_ms = redis.call('ZSCORE', expiry, holder)

@@ -53,9 +53,13 @@ class LeaseKeys:
     lapse: DeadlineKeys
 
 
+def _app(key_prefix: str) -> str:
+    return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1"
+
+
 def lease_keys(key_prefix: str, family: str) -> LeaseKeys:
     """The keys of the leases of `family` in the app that owns `key_prefix`."""
-    app = f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1"
+    app = _app(key_prefix)
     base = f"{app}:l:{checked_segment(family, argument='family')}"
     lapse = f"{base}:lapse"
     return LeaseKeys(
@@ -64,3 +68,23 @@ def lease_keys(key_prefix: str, family: str) -> LeaseKeys:
         generation=f"{base}:generation",
         lapse=DeadlineKeys(due=f"{lapse}:due", claimed=f"{lapse}:claimed", claim=f"{lapse}:claim"),
     )
+
+
+@dataclass(frozen=True)
+class LockKeys:
+    """The keys of one lock family: the app's epoch, the expiry ZSET and the generation HASH.
+
+    A host's script passes them from its own KEYS in this order and builds the `keys` table of
+    `tandem.lock_state` with `{epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}`.
+    """
+
+    epoch: str
+    expiry: str
+    generation: str
+
+
+def lock_keys(key_prefix: str, family: str) -> LockKeys:
+    """The keys of the locks of `family` in the app that owns `key_prefix`."""
+    app = _app(key_prefix)
+    base = f"{app}:lock:{checked_segment(family, argument='family')}"
+    return LockKeys(epoch=f"{app}:epoch", expiry=f"{base}:expiry", generation=f"{base}:generation")

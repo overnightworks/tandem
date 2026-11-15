@@ -134,9 +134,9 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
 
     with caplog.at_level(logging.WARNING, logger="tandem.leases"):
         async with holder_pod.kept("pod-a", every=EVERY):
-            await observer.acl_setuser(key_prefix, commands=["-evalsha"])
+            await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
             await until_gone(observer_pod, "pod-a")
-            await observer.acl_setuser(key_prefix, commands=["+evalsha"])
+            await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
             await until(alive)
 
     levels = {record.levelno for record in caplog.records if record.name == "tandem.leases"}
@@ -230,7 +230,7 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     )
     task.cancel()
     if end_fails:
-        await observer.acl_setuser(key_prefix, commands=["-evalsha"])
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
     with caplog.at_level(logging.ERROR, logger="tandem.leases"):
         leases.gate.set()
         await asyncio.gather(task, return_exceptions=True)
