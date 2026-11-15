@@ -270,7 +270,7 @@ class Leases:
 
         A reply lost under the client's `Retry` can replay a renewal as `started=False`.
         """
-        async with StepTimer("lease_renewal.ended", logger, **self._lease_fields(holder)):
+        async with self._step_timer("lease_renewal.ended", holder):
             return await self._renew_untimed(holder)
 
     async def _renew_untimed(self, holder: str) -> Renewal:
@@ -283,7 +283,7 @@ class Leases:
 
     async def end(self, holder: str, generation: str) -> bool:
         """End the live lease of `generation`, its lapse due now; else change nothing."""
-        async with StepTimer("lease_end.ended", logger, **self._lease_fields(holder)):
+        async with self._step_timer("lease_end.ended", holder):
             return await self._end_untimed(holder, generation)
 
     async def _end_untimed(self, holder: str, generation: str) -> bool:
@@ -336,7 +336,7 @@ class Leases:
         try:
             yield hold
         finally:
-            async with StepTimer("lease_end.ended", logger, **self._lease_fields(holder)):
+            async with self._step_timer("lease_end.ended", holder):
                 await _finished_despite_cancellation(
                     asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
                     self._lease_fields(holder),
@@ -526,6 +526,9 @@ class Leases:
         if not kept:
             logger.warning("lapse_claim.expired", extra=fields)
             pending.discard(due)
+
+    def _step_timer(self, event: str, holder: str) -> StepTimer:
+        return StepTimer(event, logger, lease_family=self._family, holder_id=holder)
 
     def _lease_fields(self, holder: str) -> dict[str, str]:
         return {"lease_family": self._family, "holder_id": holder}
