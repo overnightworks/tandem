@@ -30,7 +30,13 @@ from redis.backoff import ExponentialBackoff
 from tandem import Resubscribed, StoreError, Wake, WakeChannel
 
 # The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1).
-redis = Redis.from_url("redis://redis:6379", retry=Retry(ExponentialBackoff(), 3))
+# The timeouts let `publish` fail on a Redis that stays silent (see the publish row).
+redis = Redis.from_url(
+    "redis://redis:6379",
+    retry=Retry(ExponentialBackoff(), 3),
+    socket_timeout=5,
+    socket_connect_timeout=5,
+)
 channel = WakeChannel(redis, key_prefix="skat")
 
 
@@ -57,7 +63,7 @@ async def save(served: Served, address: str, value: str) -> None:
 |---|---|
 | `WakeChannel(redis, *, key_prefix)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. |
 | `checked_segment(value, *, argument)` | The check `WakeChannel` applies to `key_prefix`: it returns `value` when it is one segment matching `[a-z0-9][a-z0-9-]*` and raises `ValueError` naming `argument` otherwise. A host that derives a prefix, such as `<prefix>-agents`, validates it with this before it builds a channel. |
-| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with an unreachable Redis `publish` can block for about the `Retry`'s total plus each attempt's connect timeout before it raises. |
+| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer; a Redis that stays silent fails it only when the host's client sets `socket_timeout` and `socket_connect_timeout`, which default to none, so without them `publish` waits for ever. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with an unreachable Redis `publish` can block for about the `Retry`'s total plus each attempt's connect timeout before it raises. |
 | `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
 | `Wake(address)` | A pod published `address`. |
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
@@ -83,7 +89,8 @@ close that gap:
    have changed. After a Redis restart the host's own client can still hold stale pooled connections, so
    the first command of that re-read fails with `ConnectionError` on a default `redis.asyncio` client. The
    host's client therefore carries a `Retry`, as in the quick start, or the re-read retries itself.
-2. **After a failed `publish`, publish again or bound the readers' staleness.** A failure means the
+2. **After a failed `publish`, publish again or bound the readers' staleness.** `publish` fails on a silent
+   Redis only under the client's `socket_timeout`, so the host sets it. A failure means the
    delivery is uncertain: the `PUBLISH` may never have reached Redis, or Redis delivered it and only the
    reply was lost. A second `publish` of the same address only causes a duplicate wake. Alternatively every
    reader re-reads on a period, which bounds how stale it can get.
