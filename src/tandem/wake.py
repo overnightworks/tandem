@@ -43,8 +43,15 @@ class WakeChannel:
                 # A single-connection client keeps the pool's connection and serializes its own
                 # commands on this lock. redis-py offers no public way to take it without running
                 # the command through its Retry, so this relies on the private attribute, as the
-                # client's own execute_command does; a rename in redis-py breaks this line.
-                async with redis._single_conn_lock:
+                # client's own execute_command does; a rename in redis-py fails loud below.
+                try:
+                    lock = redis._single_conn_lock
+                except AttributeError as error:
+                    raise RuntimeError(
+                        "tandem publishes over a single-connection client through redis-py's "
+                        "Redis._single_conn_lock, which this redis-py version does not have"
+                    ) from error
+                async with lock:
                     await self._send_publish(own, address)
             else:
                 pool = redis.connection_pool

@@ -95,3 +95,20 @@ async def test_a_single_connection_client_publishes_over_its_own_connection_besi
 
         assert {await reader.next_wake() for _ in addresses} == {Wake(a) for a in addresses}
         assert reader.drain() == []
+
+
+async def test_a_single_connection_client_without_the_lock_tandem_relies_on_fails_with_its_name(
+    make_client: Callable[..., Redis], redis_url: str, key_prefix: str
+):
+    client = make_client(redis_url, single_connection_client=True, max_connections=1)
+    await client.ping()
+
+    async def initialized_under_the_renamed_lock() -> Redis:
+        return client
+
+    # A redis-py that renamed the lock takes it under the new name in initialize.
+    del client._single_conn_lock
+    client.initialize = initialized_under_the_renamed_lock  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="_single_conn_lock"):
+        await WakeChannel(client, key_prefix=key_prefix).publish("orders/7")

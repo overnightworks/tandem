@@ -83,18 +83,16 @@ def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend,
     client = backend.new_client()
     with pytest.raises(ValueError, match="key_prefix"):
         WakeChannel(client, key_prefix=key_prefix)
+    with pytest.raises(ValueError, match="prefix_of_the_host"):
+        checked_segment(key_prefix, argument="prefix_of_the_host")
 
 
 @pytest.mark.parametrize("value", ["skat", "skat-agents", "0a"])
-def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(backend: Backend, value: str):
+async def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(
+    redis_url: str, make_client: Callable[..., Redis], value: str
+):
     assert checked_segment(value, argument="key_prefix") == value
-    WakeChannel(backend.new_client(), key_prefix=value)
-
-
-@pytest.mark.parametrize("value", ["a:b", "", "Upper", "-lead", "a b", "a\n"])
-def test_checked_segment_refuses_what_wake_channel_refuses_naming_the_argument(value: str):
-    with pytest.raises(ValueError, match="prefix_of_the_host"):
-        checked_segment(value, argument="prefix_of_the_host")
+    WakeChannel(make_client(redis_url), key_prefix=value)
 
 
 async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
