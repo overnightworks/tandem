@@ -1,2 +1,7 @@
 [gate]
 mandatory_jobs = ["checks", "lowest-direct"]
+
+[[layout.allow]]
+path = "tests/test_proxy_teardown.py"
+rule = "test-layout"
+reason = "tests the suite's own TCP proxy (tests/support/proxy.py), which no src/tandem module owns"
