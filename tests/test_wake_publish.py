@@ -1,14 +1,16 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import cast
 
 import pytest
+from logline import Outcome, current_traceparent, unit_trace
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
 from tandem import StoreError, Wake, WakeChannel
 from tests.support.host import ScenarioHost
+from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 
@@ -115,3 +117,28 @@ async def test_a_single_connection_client_without_the_lock_tandem_relies_on_fail
 
     with pytest.raises(RuntimeError, match="_single_conn_lock"):
         await channel.publish("orders/7")
+
+
+async def test_a_publish_writes_one_line_in_the_hosts_trace_whether_it_succeeds_or_is_refused(
+    url_denying: Callable[[str], Awaitable[str]],
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    accepted = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    refused = WakeChannel(make_client(await url_denying("publish")), key_prefix=key_prefix)
+
+    with unit_trace(None):
+        traceparent = current_traceparent()
+        assert traceparent is not None
+        await accepted.publish("orders/7")
+        with pytest.raises(StoreError):
+            await refused.publish("orders/7")
+
+    done, failed = log_lines.of("wake_publication.ended", "tandem.wake")
+    assert (done["level"], done["outcome"]) == ("info", Outcome.OK)
+    assert (failed["level"], failed["outcome"]) == ("error", Outcome.FAILED)
+    assert failed["error_type"] == StoreError.__name__
+    assert done["duration_ms"] >= 0 and failed["duration_ms"] >= 0
+    assert done["trace_id"] == failed["trace_id"] == traceparent.split("-")[1]

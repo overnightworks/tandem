@@ -6,12 +6,19 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 
+from logline import StepTimer
 from redis import exceptions as redis_errors
 from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
 
 from tandem.client import Client
-from tandem.errors import BACKOFF_FIRST_SECONDS, is_outage, next_backoff, store_error
+from tandem.errors import (
+    BACKOFF_FIRST_SECONDS,
+    FailureReason,
+    is_outage,
+    next_backoff,
+    store_error,
+)
 from tandem.keys import wake_channel
 
 logger: logging.Logger = logging.getLogger(__name__)
@@ -34,6 +41,10 @@ class WakeChannel:
 
     async def publish(self, address: str) -> None:
         """Send one PUBLISH. A failure means the delivery is uncertain; it is not resent."""
+        async with StepTimer("wake_publication.ended", logger):
+            await self._publish(address)
+
+    async def _publish(self, address: str) -> None:
         # The client's own execute_command would run the PUBLISH under the client's Retry, which can
         # send it again after a lost reply; the connection is driven directly instead.
         redis = self._redis
@@ -73,6 +84,7 @@ class WakeChannel:
         A payload that is no valid UTF-8 is logged and skipped.
         """
         backoff = BACKOFF_FIRST_SECONDS
+        failed_attempts = 0
         while True:
             pubsub = self._redis.pubsub(ignore_subscribe_messages=False)
             try:
@@ -81,6 +93,8 @@ class WakeChannel:
                     event = await self._next_event(pubsub)
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
+                        self._log_confirmed(failed_attempts)
+                        failed_attempts = 0
                     yield event
             except UnicodeDecodeError as error:
                 # A client that decodes responses fails inside get_message, which leaves the
@@ -90,6 +104,8 @@ class WakeChannel:
             except redis_errors.RedisError as error:
                 if not is_outage(error):
                     raise store_error(f"subscribe to {self._channel}", error) from error
+                failed_attempts += 1
+                self._log_lost(error, failed_attempts)
             finally:
                 await self._close(pubsub)
             await self._wait(backoff)
@@ -117,7 +133,26 @@ class WakeChannel:
 
     def _log_skipped_payload(self, error: UnicodeDecodeError) -> None:
         # One payload no pod of this app published must not end the subscription for good.
-        logger.warning("skipped a wake payload of %d bytes, no valid UTF-8", len(error.object))
+        logger.warning(
+            "wake_payload.skipped",
+            extra={"reason": "invalid_utf8", "payload_bytes": len(error.object)},
+        )
+
+    def _log_lost(self, error: redis_errors.RedisError, failed_attempts: int) -> None:
+        # One warning per outage; the attempts that follow are developer detail.
+        level = logging.WARNING if failed_attempts == 1 else logging.DEBUG
+        logger.log(
+            level,
+            "wake_subscription.lost",
+            extra={
+                "reason": FailureReason.OUTAGE,
+                "error_type": type(error).__name__,
+                "failed_attempt_count": failed_attempts,
+            },
+        )
+
+    def _log_confirmed(self, failed_attempts: int) -> None:
+        logger.info("wake_subscription.confirmed", extra={"failed_attempt_count": failed_attempts})
 
     def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
         if message["type"] == "subscribe":
