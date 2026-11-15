@@ -1,7 +1,7 @@
 """WakeChannel: tell the pods of one app that something changed, and when to re-read everything."""
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 
@@ -27,16 +27,9 @@ class Resubscribed:
 
 
 class WakeChannel:
-    def __init__(
-        self,
-        redis: Redis,
-        *,
-        key_prefix: str,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
-    ) -> None:
+    def __init__(self, redis: Redis, *, key_prefix: str) -> None:
         self._redis = redis
         self._channel = wake_channel(key_prefix)
-        self._sleep = sleep
 
     async def publish(self, address: str) -> None:
         """Send one PUBLISH. A failure means the delivery is uncertain; nothing is retried."""
@@ -76,8 +69,11 @@ class WakeChannel:
                 raise StoreError(f"subscribe to {self._channel} failed: {error}") from error
             finally:
                 await self._close(pubsub)
-            await self._sleep(backoff)
+            await self._wait(backoff)
             backoff = min(backoff * 2, BACKOFF_CAP_SECONDS)
+
+    async def _wait(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
 
     async def _close(self, pubsub: PubSub) -> None:
         connection = pubsub.connection

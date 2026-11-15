@@ -10,7 +10,7 @@ from redis.backoff import ConstantBackoff, NoBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
 
 from tandem import Wake, WakeChannel, wake
-from tests.support.backoffs import Backoffs
+from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.host import ScenarioHost
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
@@ -88,7 +88,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     monkeypatch.setattr(wake, "BACKOFF_CAP_SECONDS", 0.04)
     client = make_client(_through(proxy), retry=Retry(NoBackoff(), 1))
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
-    channel = WakeChannel(client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=backoffs)
     async with Reader(channel) as reader:
         await reader.next_resubscribed()
         proxy.cut()

@@ -1,24 +1,42 @@
-"""The delays tandem waited between its attempts."""
+"""The delays tandem waits between its attempts, recorded instead of waited."""
 
 import asyncio
 
+from redis.asyncio import Redis
+
+from tandem import WakeChannel
 from tests.support.waiting import BOUND_SECONDS
 
 
 class Backoffs:
-    """The delays tandem waited, in order; `sleep` is what a test hands to `WakeChannel`."""
+    """The delays a `BackoffRecordingChannel` was asked to wait, in order."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, hold: bool) -> None:
         self.delays: list[float] = []
+        self.hold = hold
         self._changed = asyncio.Condition()
 
-    async def sleep(self, delay: float) -> None:
+    async def record(self, delay: float) -> None:
+        """Note the delay; a holding record then waits until cancelled, any other returns soon."""
         async with self._changed:
             self.delays.append(delay)
             self._changed.notify_all()
-        await asyncio.sleep(delay)
+        if self.hold:
+            await asyncio.Event().wait()
+        await asyncio.sleep(0)
 
     async def reached(self, count: int) -> None:
         async with asyncio.timeout(BOUND_SECONDS):
             async with self._changed:
                 await self._changed.wait_for(lambda: len(self.delays) >= count)
+
+
+class BackoffRecordingChannel(WakeChannel):
+    """A `WakeChannel` whose waits between reconnect attempts go to `backoffs`."""
+
+    def __init__(self, redis: Redis, *, key_prefix: str, backoffs: Backoffs) -> None:
+        super().__init__(redis, key_prefix=key_prefix)
+        self._backoffs = backoffs
+
+    async def _wait(self, seconds: float) -> None:
+        await self._backoffs.record(seconds)

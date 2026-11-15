@@ -138,8 +138,14 @@ async def backend(
 
 @pytest.fixture
 def backoffs() -> Backoffs:
-    """Records the back-offs of a `WakeChannel` that is given `backoffs.sleep`."""
-    return Backoffs()
+    """Records the back-offs of a `BackoffRecordingChannel` and lets each pass at once."""
+    return Backoffs(hold=False)
+
+
+@pytest.fixture
+def held_backoffs() -> Backoffs:
+    """Records the back-offs of a `BackoffRecordingChannel` and keeps it in its first one."""
+    return Backoffs(hold=True)
 
 
 @pytest.fixture

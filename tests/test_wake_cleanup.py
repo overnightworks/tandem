@@ -6,7 +6,7 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
 from tandem import WakeChannel
-from tests.support.backoffs import Backoffs
+from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 from tests.support.waiting import until
@@ -48,14 +48,14 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
     make_client: Callable[..., Redis],
     observer: Redis,
     key_prefix: str,
-    backoffs: Backoffs,
+    held_backoffs: Backoffs,
 ):
     tasks_before = asyncio.all_tasks()
     client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 0))
-    channel = WakeChannel(client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=held_backoffs)
     async with Reader(channel) as reader:
         await reader.next_resubscribed()
         proxy.cut()
-        await backoffs.reached(1)
+        await held_backoffs.reached(1)
     assert not reader.running
     await _nothing_is_left(observer, key_prefix, tasks_before, proxy)

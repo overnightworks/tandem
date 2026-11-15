@@ -7,8 +7,8 @@ from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
 
-from tandem import Resubscribed, Wake, WakeChannel
-from tests.support.backoffs import Backoffs
+from tandem import Resubscribed, Wake
+from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.numbered_publisher import NumberedPublisher
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
@@ -67,7 +67,9 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
     backoffs: Backoffs,
 ):
     reader_client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=disruption.retry)
-    reader_channel = WakeChannel(reader_client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    reader_channel = BackoffRecordingChannel(
+        reader_client, key_prefix=key_prefix, backoffs=backoffs
+    )
     async with Reader(reader_channel) as reader:
         await reader.next_resubscribed()
         (channel,) = await observer.pubsub_channels(f"{key_prefix}*")
