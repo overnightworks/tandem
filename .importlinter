@@ -1,5 +1,5 @@
-# Redis is tandem's one runtime dependency and the test tools are dev-only: tandem imports none of
-# them. quality's CI gate checks the contract over the real import graph.
+# Redis and logline are tandem's runtime dependencies; the test tools are dev-only and tandem imports
+# none of them. quality's CI gate checks the contract over the real import graph.
 [importlinter]
 include_external_packages = True
 root_packages =

@@ -10,7 +10,7 @@ from tandem.lua import LUA_KIT
 from tandem.script import Script
 from tandem.wake import Resubscribed, Wake, WakeChannel
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 __all__ = [
     "LUA_KIT",
