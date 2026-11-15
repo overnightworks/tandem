@@ -94,8 +94,8 @@ class Deadlines:
         `key_prefix` and `kind` are each one segment (`checked_segment`); the claim's length must be
         positive.
         """
-        if claim_for <= timedelta(0):
-            raise ValueError(f"claim_for must be positive, got {claim_for!r}")
+        if not isinstance(claim_for, timedelta) or claim_for <= timedelta(0):
+            raise ValueError(f"claim_for must be a positive timedelta, got {claim_for!r}")
         self._redis = redis
         self._keys = deadline_keys(key_prefix, kind)
         self._claim_for_ms = _milliseconds(claim_for)
@@ -118,13 +118,16 @@ class Deadlines:
         """Remove `key`, waiting or claimed; True when there was something to remove."""
         return await self._cancel.run(self._key_names(), [key]) == 1
 
-    async def claim_due(self, *, claimer: str, limit: int) -> list[Due]:
+    async def claim_due(
+        self,
+        *,
+        claimer: str,  # NOSONAR(python:S1172) - the signature names the claimer, no record kept
+        limit: int,
+    ) -> list[Due]:
         """Claim up to `limit` keys that are due or whose claim expired, each under a fresh token.
 
-        `claimer` names the caller and must not be blank; tandem keeps no record of it.
+        `claimer` names the caller; tandem keeps no record of it.
         """
-        if not claimer.strip():
-            raise ValueError("claimer must not be blank")
         if limit < 1:
             raise ValueError(f"limit must be at least 1, got {limit!r}")
         tokens = [secrets.token_hex(_TOKEN_BYTES) for _ in range(limit)]

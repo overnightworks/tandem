@@ -88,17 +88,15 @@ async def test_claim_due_takes_at_most_the_limit_each_under_a_distinct_token_and
 
 
 @pytest.mark.parametrize(
-    ("claimer", "limit", "argument"),
-    [("b", 0, "limit"), ("b", -1, "limit"), ("", 1, "claimer"), ("  ", 1, "claimer")],
+    "limit",
+    [0, -1],
 )
-async def test_claim_due_without_a_claimer_or_room_for_a_claim_fails_loud(
+async def test_claim_due_without_room_for_a_claim_fails_loud(
     backend: Backend,
     new_deadlines: Callable[..., Deadlines],
-    claimer: str,
     limit: int,
-    argument: str,
 ):
     deadlines = new_deadlines(backend.new_client())
 
-    with pytest.raises(ValueError, match=argument):
-        await deadlines.claim_due(claimer=claimer, limit=limit)
+    with pytest.raises(ValueError, match="limit"):
+        await deadlines.claim_due(claimer="b", limit=limit)

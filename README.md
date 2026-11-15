@@ -83,17 +83,17 @@ async def expire_seats(served: Served) -> None:
 | `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
 | `Wake(address)` | A pod published `address`. |
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
-| `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else raises `ValueError` naming the argument. A deadline key is any string. |
+| `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else (a `claim_for` that is no `timedelta` included) raises `ValueError` naming the argument. A deadline key is any string. |
 | `await deadlines.set(key, due_in)` | `key` comes due `due_in` after now on Redis `TIME` (a pod's clock is never read). A `key` that already waits is re-armed; a `key` that a claimer holds is re-armed too and the claim is void, so the claimer's later `done` returns False and leaves the new deadline. |
 | `await deadlines.cancel(key)` | Removes `key`, waiting or claimed, and voids its claim. True when there was something to remove. |
-| `await deadlines.claim_due(*, claimer, limit)` | Claims at most `limit` keys that are due, and then keys whose claim ran out, each under a fresh random 128-bit token, and returns them as `Due`s. `limit` is at least 1 and `claimer` is not blank, or it raises `ValueError` naming the argument. tandem keeps no record of `claimer`. |
+| `await deadlines.claim_due(*, claimer, limit)` | Claims at most `limit` keys that are due, and then keys whose claim ran out, each under a fresh random 128-bit token, and returns them as `Due`s. `limit` is at least 1, or it raises `ValueError` naming the argument. tandem keeps no record of `claimer`. |
 | `await deadlines.extend(due)` | Holds the claim for another `claim_for`. False once its token is gone or the claim ran out. |
 | `await deadlines.done(due)` | Finishes the claim and removes the key. False once its token is gone. |
 | `Due(key, claim)` | One claim: the deadline's key and its token. |
-| `deadlines.keys` | The `DeadlineKeys` (`due`, `claimed`, `claim`), the three key names of the kind, for a caller's script that runs `LUA_KIT`'s transitions on them. |
-| `Script(redis, source)` | A caller's Lua, run after `LUA_KIT`. `await script.run(keys, args)` runs it by its SHA, loads it again after `NOSCRIPT` and returns Redis's raw reply; every Redis failure raises `StoreError`. The host client's `Retry` governs a lost connection and can run the script again after a lost reply; tandem adds no retry. Redis does not roll a script back: a script that fails after a write keeps the write, so it checks before it writes. |
+| `deadlines.keys` | The `DeadlineKeys` (`due`, `claimed`, `claim`), the three key names of the kind, for a caller's script that runs `LUA_KIT`'s transitions on them. A script gets them as `KEYS` in the order `due`, `claimed`, `claim` (`[keys.due, keys.claimed, keys.claim]`) and builds the `keys` table of `LUA_KIT` with `local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}`. |
+| `Script(redis, source)` | A caller's Lua, run after `LUA_KIT`. `await script.run(keys, args)` runs it by its SHA, loads it again after `NOSCRIPT` and returns Redis's raw reply; every Redis failure raises `StoreError`. The host client's `Retry` governs a lost connection and can run the script again after a lost reply; tandem adds no retry. Redis does not roll a script back: a script that fails after a write keeps the write, so it checks before it writes. `LUA_KIT` is prepended to `source`, so an error's line number is offset by the kit's lines, and a `#!lua` shebang cannot be used. |
 | `Client` | The type of the Redis client tandem takes, for a host's own parameter. |
-| `LUA_KIT` | Lua that defines the table `tandem`; `Script` prepends it. `keys` below is a table with the fields `due`, `claimed` and `claim`, built from the script's `KEYS`. |
+| `LUA_KIT` | Lua that defines the table `tandem`; `Script` prepends it. `keys` below is a table with the fields `due`, `claimed` and `claim`, built from the script's `KEYS` as above. |
 | `tandem.now_ms()` | Redis `TIME` in milliseconds. |
 | `tandem.deadline_set(keys, key, due_in_ms)` | The transition of `Deadlines.set`: the key waits for `due_in_ms` from now and its claim is void. Returns the due in ms. |
 | `tandem.deadline_cancel(keys, key)` | The transition of `Deadlines.cancel`. Returns 1 or 0. |
@@ -134,7 +134,6 @@ close that gap, and two more cover deadlines:
    reader re-reads on a period, which bounds how stale it can get.
 3. **A pod turns Ready at its first `Resubscribed`.** Before it, the pod is deaf to wakes and a state it
    served earlier may be stale.
-
 4. **Fence the effect of a claimed deadline with your own version.** A due key reaches a handler at least
    once and each key has at most one valid claim at a time, yet a handler that pauses past its claim runs
    beside the next claimer after a takeover. The host checks and writes its effect against a version or
