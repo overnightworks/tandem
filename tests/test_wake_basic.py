@@ -88,11 +88,9 @@ def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend,
 
 
 @pytest.mark.parametrize("value", ["skat", "skat-agents", "0a"])
-async def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(
-    redis_url: str, make_client: Callable[..., Redis], value: str
-):
+def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(value: str):
     assert checked_segment(value, argument="key_prefix") == value
-    WakeChannel(make_client(redis_url), key_prefix=value)
+    WakeChannel(Redis(), key_prefix=value)
 
 
 async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
