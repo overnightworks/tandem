@@ -145,8 +145,10 @@ async def test_state_changed_while_disconnected_is_read_again_at_the_next_resubs
 
 async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str, key_prefix: str):
 
+    started: list[asyncio.subprocess.Process] = []
+
     async def start(command: str, *address: str) -> asyncio.subprocess.Process:
-        return await asyncio.create_subprocess_exec(
+        process = await asyncio.create_subprocess_exec(
             sys.executable,
             "-m",
             "tests.support.wake_process",
@@ -156,9 +158,11 @@ async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str,
             *address,
             stdout=asyncio.subprocess.PIPE,
         )
+        started.append(process)
+        return process
 
-    readers = [await start("read") for _ in range(2)]
     try:
+        readers = [await start("read") for _ in range(2)]
         for process in readers:
             assert process.stdout is not None
             assert (await within(process.stdout.readline())).strip() == b"RESUBSCRIBED"
@@ -168,6 +172,7 @@ async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str,
             assert process.stdout is not None
             assert (await within(process.stdout.readline())).strip() == b"WAKE shared"
     finally:
-        for process in readers:
-            process.kill()
+        for process in started:
+            if process.returncode is None:
+                process.kill()
             await process.wait()
