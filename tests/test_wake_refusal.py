@@ -24,3 +24,15 @@ async def test_a_subscription_that_redis_refuses_raises_store_error_from_receive
     async with Reader(channel) as reader:
         with pytest.raises(StoreError):
             await reader.next()
+
+
+async def test_credentials_that_redis_rejects_raise_store_error_from_received_and_publish(
+    url_with_wrong_password: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    channel = WakeChannel(make_client(url_with_wrong_password), key_prefix=key_prefix)
+
+    with pytest.raises(StoreError):
+        await channel.publish("orders/7")
+    async with Reader(channel) as reader:
+        with pytest.raises(StoreError):
+            await reader.next()

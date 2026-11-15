@@ -8,7 +8,7 @@ from redis.asyncio import Redis
 from tandem import Resubscribed, StoreError, Wake, WakeChannel
 from tests.support.backends import Backend
 from tests.support.reader import Reader
-from tests.support.waiting import within
+from tests.support.waiting import until, within
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
@@ -39,14 +39,28 @@ async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend
     assert all(isinstance(wake, Wake) for wake in wakes)
 
 
+@pytest.mark.parametrize("decode_responses", [False, True])
 async def test_a_wake_published_through_one_client_arrives_through_another(
-    backend: Backend, key_prefix: str
+    backend: Backend, key_prefix: str, decode_responses: bool
 ):
     publisher = WakeChannel(backend.new_client(), key_prefix=key_prefix)
-    async with Reader(WakeChannel(backend.new_client(), key_prefix=key_prefix)) as reader:
+    subscriber = backend.new_client(decode_responses=decode_responses)
+    async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
         await reader.next_resubscribed()
         await publisher.publish("orders/7")
         assert await reader.next_wake() == Wake("orders/7")
+
+
+@pytest.mark.parametrize("decode_responses", [False, True])
+async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str, decode_responses: bool
+):
+    host_client = make_client(redis_url, encoding="latin-1", decode_responses=decode_responses)
+    channel = WakeChannel(host_client, key_prefix=key_prefix)
+    async with Reader(channel) as reader:
+        await reader.next_resubscribed()
+        await channel.publish("caf\u00e9/7")
+        assert await reader.next_wake() == Wake("caf\u00e9/7")
 
 
 async def test_publish_fails_during_an_outage_and_delivers_after_it(
@@ -82,8 +96,14 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
     events = cast(AsyncGenerator[Wake | Resubscribed], channel.received())
     try:
         assert await within(anext(events)) == Resubscribed()
-        # The health check falls due while nobody reads; the reader's next read sends the PING.
-        await asyncio.sleep(2 * interval)
+        # redis-py sends its PING at the next read once the loop clock passes the interval.
+        clock = asyncio.get_running_loop()
+        health_check_falls_due = clock.time() + interval
+
+        async def health_check_is_due() -> bool:
+            return clock.time() > health_check_falls_due
+
+        await until(health_check_is_due)
         pending = asyncio.ensure_future(anext(events))
         await publisher.publish("a")
         await publisher.publish("b")

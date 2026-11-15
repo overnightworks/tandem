@@ -1,6 +1,5 @@
 import asyncio
 import contextlib
-import subprocess
 import sys
 from collections.abc import Callable
 
@@ -89,7 +88,8 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     monkeypatch.setattr(wake, "BACKOFF_CAP_SECONDS", 0.04)
     client = make_client(_through(proxy), retry=Retry(NoBackoff(), 1))
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
-    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+    channel = WakeChannel(client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    async with Reader(channel) as reader:
         await reader.next_resubscribed()
         proxy.cut()
         await backoffs.reached(6)
@@ -110,16 +110,14 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
 
 
 async def test_a_redis_restart_is_resubscribed_once_and_wakes_continue(
-    restartable_redis: tuple[str, str], make_client: Callable[..., Redis], key_prefix: str
+    restartable_redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
-    url, container = restartable_redis
-    client = make_client(url)
+    client = make_client(restartable_redis_url)
     channel = WakeChannel(client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
         await reader.next_resubscribed()
         with contextlib.suppress(RedisConnectionError):
             await client.execute_command("SHUTDOWN", "NOSAVE")
-        subprocess.run(["docker", "start", container], check=True, capture_output=True)
 
         await reader.next_resubscribed()
         await channel.publish("later")

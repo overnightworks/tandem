@@ -52,7 +52,8 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
 ):
     tasks_before = asyncio.all_tasks()
     client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 0))
-    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+    channel = WakeChannel(client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    async with Reader(channel) as reader:
         await reader.next_resubscribed()
         proxy.cut()
         await backoffs.reached(1)

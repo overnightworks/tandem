@@ -15,7 +15,11 @@ class Outage(Protocol):
     def end(self) -> None: ...
 
 
+class NewClient(Protocol):
+    def __call__(self, *, decode_responses: bool = False) -> Redis: ...
+
+
 @dataclass(frozen=True)
 class Backend:
-    new_client: Callable[[], Redis]
+    new_client: NewClient
     publisher_with_outage: Callable[[], tuple[Redis, Outage]]

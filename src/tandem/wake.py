@@ -1,10 +1,9 @@
 """WakeChannel: tell the pods of one app that something changed, and when to re-read everything."""
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
 
 from redis import exceptions as redis_errors
 from redis.asyncio import Redis
@@ -28,14 +27,29 @@ class Resubscribed:
 
 
 class WakeChannel:
-    def __init__(self, redis: Redis, *, key_prefix: str) -> None:
+    def __init__(
+        self,
+        redis: Redis,
+        *,
+        key_prefix: str,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._redis = redis
         self._channel = wake_channel(key_prefix)
+        self._sleep = sleep
 
     async def publish(self, address: str) -> None:
         """Send one PUBLISH. A failure means the delivery is uncertain; nothing is retried."""
+        # The client's own execute_command would run the PUBLISH under the client's Retry, which can
+        # send it again after a lost reply; the pooled connection is driven directly instead.
+        pool = self._redis.connection_pool
         try:
-            await self._redis.publish(self._channel, address)
+            connection = await pool.get_connection()
+            try:
+                await connection.send_command("PUBLISH", self._channel, address)
+                await connection.read_response()
+            finally:
+                await pool.release(connection)
         except redis_errors.RedisError as error:
             raise StoreError(f"publish to {self._channel} failed: {error}") from error
 
@@ -50,17 +64,19 @@ class WakeChannel:
                     message = await pubsub.get_message(timeout=None)
                     if message is None:  # the reply to redis-py's health check is no event
                         continue
-                    event = _event(message)
+                    event = self._event(message)
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                     yield event
+            except (redis_errors.AuthenticationError, redis_errors.AuthorizationError) as error:
+                raise StoreError(f"subscribe to {self._channel} refused: {error}") from error
             except redis_errors.ConnectionError, redis_errors.TimeoutError:
                 pass
             except redis_errors.RedisError as error:
                 raise StoreError(f"subscribe to {self._channel} failed: {error}") from error
             finally:
                 await self._close(pubsub)
-            await asyncio.sleep(backoff)
+            await self._sleep(backoff)
             backoff = min(backoff * 2, BACKOFF_CAP_SECONDS)
 
     async def _close(self, pubsub: PubSub) -> None:
@@ -70,9 +86,7 @@ class WakeChannel:
                 await pubsub.unsubscribe(self._channel)
         await pubsub.aclose()
 
-
-def _event(message: dict[str, Any]) -> Wake | Resubscribed:
-    if message["type"] == "subscribe":
-        return Resubscribed()
-    data = message["data"]
-    return Wake(data.decode() if isinstance(data, bytes) else data)
+    def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
+        if message["type"] == "subscribe":
+            return Resubscribed()
+        return Wake(self._redis.get_encoder().decode(message["data"], force=True))

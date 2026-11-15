@@ -14,7 +14,7 @@
 - A tag is never moved or re-created; a broken release gets the next patch tag. A gate refusal leaves no tag, so the release is dispatched again once its cause is gone; after a failed `tag` job, re-run the failed jobs, never all jobs.
 - Redis is the one runtime dependency; fakeredis, pytest and the other test tools are dev-only, and `.importlinter` keeps them out of `tandem`.
 - Every name tandem gives in Redis is built in `tandem.keys`; no other module writes a key or channel literal.
-- Tests run every cell against a real Redis through `scripts/run_redis_tests.sh`; outages go through `tests/support/proxy.py`; waits are barriers and bounded waits, never sleeps. Each test uses the `key_prefix` fixture, so tests share one server in parallel. Branch coverage stays 100 %.
+- Tests run every cell against a real Redis through `scripts/run_redis_tests.sh`; outages go through `tests/support/proxy.py`; waits are barriers and bounded waits, never sleeps; a stimulus that is time itself waits on the loop clock through `until`. Each test uses the `key_prefix` fixture, so tests share one server in parallel. Branch coverage stays 100 %.
 - The published channel name and the `Resubscribed` ordering are a contract between pods of different releases: a change to `<prefix>:tandem:v1:wake` raises the version segment.
 - A name is public when `tandem/__init__.py`'s `__all__` lists it. A pull request that changes a public name states its **Breaking** line and the hosts' migration or "No migration".
 

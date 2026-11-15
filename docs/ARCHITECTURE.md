@@ -75,8 +75,9 @@ surfaces as `StoreError`.
 
 **Proof strategy.** The tests run every cell against a real Redis in a throwaway container started by
 `scripts/run_redis_tests.sh`; the cells that need an outage go through a small TCP proxy, and the cells of
-the plain flow also run on fakeredis. Waits are barriers and bounded waits, never sleeps. Branch coverage is
-100 %, measured over all tests. The lowest direct dependency floors run the same tests.
+the plain flow also run on fakeredis. Waits are barriers and bounded waits, never sleeps; a stimulus that is
+time itself waits on the loop clock. Branch coverage is 100 %, measured over all tests. The lowest direct
+dependency floors run the same tests.
 
 ## 6. Constraints and reasons
 
@@ -86,8 +87,9 @@ the plain flow also run on fakeredis. Waits are barriers and bounded waits, neve
   re-subscription triggers inside the client's retry budget. redis-py 8.1 delivers that confirmation through
   `get_message`, so tandem never copies the host's client settings and never changes the host's pool or
   `Retry`.
-- `publish` is one `PUBLISH` with no retry or queue of tandem's: a queued wake would outlive the state it
-  describes, and a retry cannot tell a lost request from a lost reply.
+- `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
+  wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
+  borrows a connection from the host's pool and sends the one command itself.
 - The prefix is one segment checked at construction: a prefix with `:` would make the segments of a channel name
   ambiguous, and a wrong value must fail where it is written.
 - On cancellation `received()` unsubscribes and closes its connection, so a cancelled reader leaves no

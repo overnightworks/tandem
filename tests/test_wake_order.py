@@ -67,7 +67,8 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
     backoffs: Backoffs,
 ):
     reader_client = make_client(f"redis://127.0.0.1:{proxy.port}", retry=disruption.retry)
-    async with Reader(WakeChannel(reader_client, key_prefix=key_prefix)) as reader:
+    reader_channel = WakeChannel(reader_client, key_prefix=key_prefix, sleep=backoffs.sleep)
+    async with Reader(reader_channel) as reader:
         await reader.next_resubscribed()
         (channel,) = await observer.pubsub_channels(f"{key_prefix}*")
         publisher = NumberedPublisher(make_client(redis_url), str(channel))

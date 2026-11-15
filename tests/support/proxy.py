@@ -6,6 +6,8 @@ from collections.abc import Callable, Coroutine
 from enum import Enum, auto
 from typing import Any
 
+from tests.support.waiting import BOUND_SECONDS
+
 
 class Mode(Enum):
     FORWARD = auto()
@@ -21,6 +23,8 @@ class TcpProxy:
         self._mode = Mode.FORWARD
         self._server: asyncio.Server | None = None
         self._writers: set[asyncio.StreamWriter] = set()
+        self._clients: set[asyncio.StreamWriter] = set()
+        self._silenced: set[asyncio.StreamWriter] = set()
         self._attempts = 0
         self._released = asyncio.Event()
         self._attempt_seen = asyncio.Condition()
@@ -30,10 +34,6 @@ class TcpProxy:
     def port(self) -> int:
         assert self._server is not None
         return self._server.sockets[0].getsockname()[1]
-
-    @property
-    def attempts_while_cut(self) -> int:
-        return self._attempts
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._accept, "127.0.0.1", 0)
@@ -57,6 +57,10 @@ class TcpProxy:
     def drop_replies(self) -> None:
         self._mode = Mode.DROP_REPLIES
 
+    def drop_replies_of_open_connections(self) -> None:
+        """Discard what the server answers on the connections open now; later connections work."""
+        self._silenced = set(self._clients)
+
     def hold(self) -> None:
         """Keep every connection opened from now on waiting until `restore`."""
         self._released = asyncio.Event()
@@ -68,8 +72,9 @@ class TcpProxy:
 
     async def attempts_reached(self, count: int) -> None:
         """Wait until `count` connection attempts were refused since the last cut."""
-        async with self._attempt_seen:
-            await self._attempt_seen.wait_for(lambda: self._attempts >= count)
+        async with asyncio.timeout(BOUND_SECONDS):
+            async with self._attempt_seen:
+                await self._attempt_seen.wait_for(lambda: self._attempts >= count)
 
     def _drop_connections(self) -> None:
         for writer in tuple(self._writers):
@@ -99,6 +104,7 @@ class TcpProxy:
             await self._released.wait()
         upstream_reader, upstream_writer = await asyncio.open_connection(*self._upstream)
         self._writers |= {client_writer, upstream_writer}
+        self._clients.add(client_writer)
         pumps = [
             self._spawn(
                 self._pump(
@@ -107,7 +113,11 @@ class TcpProxy:
             ),
             self._spawn(
                 self._pump(
-                    upstream_reader, client_writer, lambda: self._mode is not Mode.DROP_REPLIES
+                    upstream_reader,
+                    client_writer,
+                    lambda: (
+                        self._mode is not Mode.DROP_REPLIES and client_writer not in self._silenced
+                    ),
                 )
             ),
         ]
@@ -115,6 +125,7 @@ class TcpProxy:
         for writer in (client_writer, upstream_writer):
             writer.close()
             self._writers.discard(writer)
+        self._clients.discard(client_writer)
         for pump in pumps:
             pump.cancel()
 

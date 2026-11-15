@@ -59,3 +59,26 @@ async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wak
         await publisher.publish("orders/7")
         assert await reader.next_wake() == Wake("orders/7")
         assert reader.drain() == []
+
+
+async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_again(
+    proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
+):
+    retrying = make_client(
+        f"redis://127.0.0.1:{proxy.port}", retry=Retry(NoBackoff(), 3), socket_timeout=0.3
+    )
+    await retrying.ping()
+    publisher = WakeChannel(retrying, key_prefix=key_prefix)
+    async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+        proxy.drop_replies_of_open_connections()
+
+        with pytest.raises(StoreError):
+            await publisher.publish("orders/7")
+
+        await WakeChannel(make_client(redis_url), key_prefix=key_prefix).publish("barrier")
+        assert [await reader.next_wake(), await reader.next_wake()] == [
+            Wake("orders/7"),
+            Wake("barrier"),
+        ]
+        assert reader.drain() == []

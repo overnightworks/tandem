@@ -52,8 +52,8 @@ async def save(served: Served, address: str, value: str) -> None:
 
 | Name | What it is |
 |---|---|
-| `WakeChannel(redis, *, key_prefix)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. |
-| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer. tandem never retries or queues it. |
+| `WakeChannel(redis, *, key_prefix, sleep=asyncio.sleep)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. `sleep` is the wait between reconnect attempts; only tests replace it. |
+| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer. tandem never retries or queues it, and the client's own `Retry` does not apply to it. |
 | `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
 | `Wake(address)` | A pod published `address`. |
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
@@ -65,7 +65,8 @@ The channel is `<key_prefix>:tandem:v1:wake`: one channel per app, so every pod 
 `received()` hides no reconnect. When the connection breaks, redis-py reconnects inside the retry budget of
 the host's client, or tandem backs off (0.5 s doubling to 5 s, with no attempt limit), subscribes again and
 carries on; either way the next event is a `Resubscribed`, before any wake it covers. Only a command Redis
-refuses outright, such as a subscribe the ACL denies, ends `received()` with `StoreError`.
+refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends `received()` with
+`StoreError`.
 
 ## The host's duties
 
@@ -78,8 +79,7 @@ close that gap:
 2. **After a failed `publish`, publish again or bound the readers' staleness.** A failure means the
    delivery is uncertain: the `PUBLISH` may never have reached Redis, or Redis delivered it and only the
    reply was lost. A second `publish` of the same address only causes a duplicate wake. Alternatively every
-   reader re-reads on a period, which bounds how stale it can get. The host's client Retry applies to
-   `publish` like to any command, so one `publish` can send more than one `PUBLISH`.
+   reader re-reads on a period, which bounds how stale it can get.
 3. **A pod turns Ready at its first `Resubscribed`.** Before it, the pod is deaf to wakes and a state it
    served earlier may be stale.
 

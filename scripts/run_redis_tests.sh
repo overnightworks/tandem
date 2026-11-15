@@ -2,9 +2,9 @@
 # Runs pytest against throwaway Redis containers: scripts/run_redis_tests.sh [pytest argument...]
 #
 # The tests find the shared server in TANDEM_TEST_REDIS_URL and a second one, which a test may shut
-# down and restart, in TANDEM_TEST_RESTARTABLE_REDIS_URL with its container name in
-# TANDEM_TEST_RESTARTABLE_REDIS_CONTAINER. Both containers go when the run ends, is stopped or the
-# caller dies; an image this run pulled goes with them. Keep the image equal to the platform base's.
+# down, in TANDEM_TEST_RESTARTABLE_REDIS_URL; its restart policy brings it back. Both containers go
+# when the run ends, is stopped or the caller dies; an image this run pulled goes with them. Keep the
+# image and the server arguments equal to the platform base's.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -53,8 +53,9 @@ trap cleanup EXIT TERM
 
 # A restarted container keeps its published port only when the port is fixed, so this one is chosen.
 restartable_port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-docker run --quiet --detach --name "${shared}" --publish 127.0.0.1::6379 "${IMAGE}" --save '' --appendonly no >/dev/null
-docker run --quiet --detach --name "${restartable}" --publish "127.0.0.1:${restartable_port}:6379" "${IMAGE}" --save '' --appendonly no >/dev/null
+server_arguments=(--save '' --appendonly no --maxmemory-policy noeviction)
+docker run --quiet --detach --name "${shared}" --publish 127.0.0.1::6379 "${IMAGE}" "${server_arguments[@]}" >/dev/null
+docker run --quiet --detach --restart always --name "${restartable}" --publish "127.0.0.1:${restartable_port}:6379" "${IMAGE}" "${server_arguments[@]}" >/dev/null
 
 for container in "${shared}" "${restartable}"; do
     for _ in $(seq "${READY_WAIT_SECONDS}"); do
@@ -68,5 +69,4 @@ shared_port=$(docker port "${shared}" 6379/tcp | head -n 1 | sed 's/.*://')
 # Run as a child, not exec'd, so that the trap above survives the command.
 TANDEM_TEST_REDIS_URL="redis://127.0.0.1:${shared_port}" \
 TANDEM_TEST_RESTARTABLE_REDIS_URL="redis://127.0.0.1:${restartable_port}" \
-TANDEM_TEST_RESTARTABLE_REDIS_CONTAINER="${restartable}" \
     uv run --no-sync pytest "$@"

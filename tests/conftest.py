@@ -1,4 +1,3 @@
-import asyncio
 import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -53,10 +52,14 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
         retry: Retry | None = None,
         socket_timeout: float | None = None,
         health_check_interval: float = 0,
+        encoding: str = "utf-8",
+        decode_responses: bool = False,
     ) -> Redis:
         options: dict[str, Any] = {
             "socket_timeout": socket_timeout,
             "health_check_interval": health_check_interval,
+            "encoding": encoding,
+            "decode_responses": decode_responses,
         }
         if retry is not None:
             options["retry"] = retry
@@ -109,7 +112,9 @@ async def backend(
     """The same scenario on the real server and on fakeredis."""
     if request.param == "redis":
         yield Backend(
-            new_client=lambda: make_client(redis_url),
+            new_client=lambda decode_responses=False: make_client(
+                redis_url, decode_responses=decode_responses
+            ),
             publisher_with_outage=lambda: (
                 make_client(f"redis://127.0.0.1:{proxy.port}"),
                 _ProxyOutage(proxy),
@@ -119,8 +124,8 @@ async def backend(
     server = FakeServer()
     fakes: list[FakeAsyncRedis] = []
 
-    def new_fake() -> FakeAsyncRedis:
-        fakes.append(FakeAsyncRedis(server=server))
+    def new_fake(decode_responses: bool = False) -> FakeAsyncRedis:
+        fakes.append(FakeAsyncRedis(server=server, decode_responses=decode_responses))
         return fakes[-1]
 
     yield Backend(
@@ -132,27 +137,15 @@ async def backend(
 
 
 @pytest.fixture
-def backoffs(monkeypatch: pytest.MonkeyPatch) -> Backoffs:
-    """Records the back-offs tandem waits; the retries of the test clients wait zero."""
-    recorded = Backoffs()
-    original = asyncio.sleep
-
-    async def sleep(delay: float, *args: Any) -> Any:
-        if delay > 0:
-            await recorded.record(delay)
-        return await original(delay, *args)
-
-    monkeypatch.setattr(asyncio, "sleep", sleep)
-    return recorded
+def backoffs() -> Backoffs:
+    """Records the back-offs of a `WakeChannel` that is given `backoffs.sleep`."""
+    return Backoffs()
 
 
 @pytest.fixture
-def restartable_redis() -> tuple[str, str]:
-    """The URL and container name of the server a test may shut down and restart."""
-    return (
-        _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL"),
-        _required_url("TANDEM_TEST_RESTARTABLE_REDIS_CONTAINER"),
-    )
+def restartable_redis_url() -> str:
+    """The URL of the server a test may shut down; Docker's restart policy brings it back."""
+    return _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL")
 
 
 @pytest.fixture
@@ -173,4 +166,21 @@ async def url_denying(
         return redis_url.replace("redis://", f"redis://{key_prefix}@")
 
     yield build
+    await observer.acl_deluser(key_prefix)
+
+
+@pytest.fixture
+async def url_with_wrong_password(
+    redis_url: str, observer: Redis, key_prefix: str
+) -> AsyncIterator[str]:
+    """The URL of a user of the shared server that presents a password Redis rejects."""
+    await observer.acl_setuser(
+        key_prefix,
+        enabled=True,
+        passwords=["+the-right-one"],
+        commands=["+@all"],
+        keys=["*"],
+        channels=["*"],
+    )
+    yield redis_url.replace("redis://", f"redis://{key_prefix}:the-wrong-one@")
     await observer.acl_deluser(key_prefix)
