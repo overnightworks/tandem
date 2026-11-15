@@ -10,6 +10,7 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
 from tandem import Leases, Liveness, Renewal, StoreError
+from tandem.errors import BACKOFF_FIRST_SECONDS
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import until_gone
 from tests.support.proxy import TcpProxy
@@ -36,18 +37,37 @@ class _GatedLeases(Leases):
         return await super().renew(holder)
 
 
+class _FailingRenewals(Leases):
+    """Leases whose renewals after the first fail as an outage, each noted at its loop time."""
+
+    def __init__(self, *args: Any, **keywords: Any) -> None:
+        super().__init__(*args, **keywords)
+        self.failed_at: list[float] = []
+        self._calls = 0
+
+    async def renew(self, holder: str) -> Renewal:
+        self._calls += 1
+        if self._calls == 1:
+            return await super().renew(holder)
+        self.failed_at.append(asyncio.get_running_loop().time())
+        raise StoreError("the renewal failed", outage=True)
+
+
 class _GatedEnd(Leases):
-    """Leases whose `end` waits at a gate the test opens, and records that it completed."""
+    """Leases whose `end` waits at a gate the test opens, then ends or, when told, fails."""
 
     def __init__(self, *args: Any, **keywords: Any) -> None:
         super().__init__(*args, **keywords)
         self.ending = asyncio.Event()
         self.gate = asyncio.Event()
         self.ended = False
+        self.fails = False
 
     async def end(self, holder: str, generation: str) -> bool:
         self.ending.set()
         await self.gate.wait()
+        if self.fails:
+            raise StoreError("the end failed")
         ended = await super().end(holder, generation)
         self.ended = True
         return ended
@@ -117,6 +137,28 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
     assert levels == {logging.ERROR}
 
 
+async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_the_first_back_off(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    every = timedelta(seconds=BACKOFF_FIRST_SECONDS * 1.6)
+    leases = _FailingRenewals(
+        make_client(redis_url),
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=2 * every,
+        claim_for=timedelta(seconds=30),
+    )
+
+    async def failed_twice() -> bool:
+        return len(leases.failed_at) >= 2
+
+    async with leases.kept("pod-a", every=every):
+        await until(failed_twice)
+
+    first, second = leases.failed_at[:2]
+    assert second - first >= every.total_seconds() * 0.9
+
+
 async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
     proxy: TcpProxy,
     redis_url: str,
@@ -172,8 +214,13 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
     assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.GONE}
 
 
+@pytest.mark.parametrize("end_fails", [False, True])
 async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_propagates(
-    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+    end_fails: bool,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    caplog: pytest.LogCaptureFixture,
 ):
     leases = _GatedEnd(
         make_client(redis_url),
@@ -182,6 +229,7 @@ async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_
         lasts=LASTS,
         claim_for=timedelta(seconds=30),
     )
+    leases.fails = end_fails
 
     inside = asyncio.Event()
 
@@ -195,8 +243,11 @@ async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_
     task.cancel()
     await within(leases.ending.wait())
     task.cancel()
-    leases.gate.set()
-    await asyncio.gather(task, return_exceptions=True)
+    with caplog.at_level(logging.ERROR, logger="tandem.leases"):
+        leases.gate.set()
+        await asyncio.gather(task, return_exceptions=True)
 
     assert task.cancelled()
-    assert leases.ended
+    assert leases.ended is not end_fails
+    logged = [record for record in caplog.records if record.name == "tandem.leases"]
+    assert bool(logged) is end_fails
