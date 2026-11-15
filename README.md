@@ -24,10 +24,13 @@ Tags are never moved; a broken release gets the next patch tag.
 
 ```python
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import ExponentialBackoff
 
 from tandem import Resubscribed, StoreError, Wake, WakeChannel
 
-redis = Redis.from_url("redis://redis:6379")
+# The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1).
+redis = Redis.from_url("redis://redis:6379", retry=Retry(ExponentialBackoff(), 3))
 channel = WakeChannel(redis, key_prefix="skat")
 
 
@@ -77,7 +80,9 @@ close that gap:
 
 1. **Re-read everything the pod serves at each `Resubscribed`.** A wake sent while the pod was
    disconnected is gone for good; the `Resubscribed` after the reconnect is the signal that anything may
-   have changed.
+   have changed. After a Redis restart the host's own client can still hold stale pooled connections, so
+   the first command of that re-read fails with `ConnectionError` on a default `redis.asyncio` client. The
+   host's client therefore carries a `Retry`, as in the quick start, or the re-read retries itself.
 2. **After a failed `publish`, publish again or bound the readers' staleness.** A failure means the
    delivery is uncertain: the `PUBLISH` may never have reached Redis, or Redis delivered it and only the
    reply was lost. A second `publish` of the same address only causes a duplicate wake. Alternatively every
