@@ -1,8 +1,0 @@
-claim_id = "04b7046ec4a04b40b214a36fc72190f8"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "cba8d8793611eb386677ab0d31de8c83aa851b21"
-branch = "claude/issue-11-tandem-0-3-0-p3-leases-with-a-generation"
-scope = ["README.md", "docs", "pyproject.toml", "src", "tests"]
-opened_commit = "63524ea4e847bfbe30715f7b777bdc443849b7f5"
-whole_reason = "One public primitive built on P2's internal deadline record; its scripts, keys and docs share one owner, so they do not split."
