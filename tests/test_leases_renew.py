@@ -109,7 +109,25 @@ async def test_an_expired_lease_reaches_a_handler_once_and_a_renewal_after_it_st
     assert lapse.generation == old.generation
 
 
-async def test_end_and_the_sweep_drop_the_holder_from_the_generation_record(
+async def test_end_drops_the_holder_from_the_generation_record(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+):
+    leases = new_leases(make_client(redis_url), lasts=timedelta(seconds=30))
+    generations = lease_keys(key_prefix, "owner").generation
+    ended = await leases.renew("pod-ended")
+    await leases.renew("pod-kept")
+
+    assert await leases.end("pod-ended", ended.generation) is True
+
+    assert not await observer.hexists(generations, "pod-ended")
+    assert await observer.hexists(generations, "pod-kept")
+
+
+async def test_the_sweep_drops_a_lapsed_holder_from_the_generation_record(
     redis_url: str,
     make_client: Callable[..., Redis],
     observer: Redis,
@@ -118,12 +136,7 @@ async def test_end_and_the_sweep_drop_the_holder_from_the_generation_record(
 ):
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     generations = lease_keys(key_prefix, "owner").generation
-    ended = await leases.renew("pod-ended")
     await leases.renew("pod-lapsed")
-    assert await observer.hlen(generations) == 2
-
-    await leases.end("pod-ended", ended.generation)
-    assert not await observer.hexists(generations, "pod-ended")
     await until_gone(leases, "pod-lapsed")
 
     async def swept() -> bool:

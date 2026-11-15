@@ -121,8 +121,9 @@ pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an
 surfaces as `StoreError`.
 
 **Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines`, `Leases` and `Script`, is a `StoreError`
-that says whether it was an outage or a refusal; `received()`, `serve_lapses` and `kept` ride out an outage
-and end, or raise, on a refusal;
+that says whether it was an outage or a refusal; `received()` and `serve_lapses` ride out an outage and end
+on a refusal; `kept` raises a refusal only at its first renewal, and a later failed renewal, outage or refusal,
+is logged as an error and retried at the next `every`;
 `publish` says nothing of whether the wake arrived.
 `received()` survives every connection failure and ends only on cancellation or a refusal;
 a payload that is no valid UTF-8 is skipped and logged by length.
