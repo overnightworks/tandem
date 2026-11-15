@@ -174,6 +174,22 @@ def _elapsed_ms(started: float) -> float:
     return round((time.perf_counter() - started) * _MILLISECONDS_PER_SECOND, 3)
 
 
+def _holds_store_error(failure: BaseException) -> bool:
+    """True when `failure` or anything it chains or groups is a `StoreError`, which names Redis."""
+    unvisited, visited = [failure], set[int]()
+    while unvisited:
+        error = unvisited.pop()
+        if isinstance(error, StoreError):
+            return True
+        if id(error) in visited:
+            continue
+        visited.add(id(error))
+        unvisited.extend(link for link in (error.__cause__, error.__context__) if link is not None)
+        if isinstance(error, BaseExceptionGroup):
+            unvisited.extend(error.exceptions)
+    return False
+
+
 def _lapse_of(due: Due) -> Lapse:
     # Split at the first ':' only: a generation holds none, a holder may.
     generation, _, holder = due.key.partition(":")
@@ -447,7 +463,7 @@ class Leases:
         logger.error(
             "lapse_handling.ended",
             extra={**fields, "error_type": type(failure).__name__},
-            exc_info=failure,
+            exc_info=None if _holds_store_error(failure) else failure,
         )
 
     def _log_round(self, started: float, tally: _RoundTally, outcome: Outcome) -> None:

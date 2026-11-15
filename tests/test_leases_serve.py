@@ -295,11 +295,57 @@ async def test_a_lapse_handling_writes_one_line_with_its_outcome(
     async with serving(leases, handle):
         (line, *_) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
 
-    assert (line["level"], line["outcome"]) == (level, outcome)
-    assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+    assert line["level"] == level
+    assert line["outcome"] == outcome
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
     assert line["duration_ms"] >= 0
     assert line.get("error_type") == (raised.__name__ if raised else None)
     assert ("Traceback" in line.get("exception", "")) == (raised is not None)
+
+
+def _store_error_raised_directly() -> Exception:
+    return StoreError("a refusal naming the store")
+
+
+def _store_error_behind_a_host_error() -> Exception:
+    try:
+        raise StoreError("a refusal naming the store")
+    except StoreError as refusal:
+        wrapped = ValueError("the host gave up")
+        wrapped.__cause__ = refusal
+        return wrapped
+
+
+@pytest.mark.parametrize(
+    ("failure", "error_type"),
+    [
+        (_store_error_raised_directly, StoreError),
+        (_store_error_behind_a_host_error, ValueError),
+    ],
+)
+async def test_a_lapse_handler_that_fails_with_a_store_error_writes_a_line_without_its_text(
+    failure: Callable[[], Exception],
+    error_type: type[Exception],
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+
+    async def handle(lapse: object) -> None:
+        raise failure()
+
+    async with serving(leases, handle):
+        (line, *_) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert line["level"] == "error"
+    assert line["outcome"] == Outcome.FAILED
+    assert line["error_type"] == error_type.__name__
+    assert "exception" not in line
+    log_lines.assert_none_holds("a refusal naming the store")
 
 
 async def test_each_lapse_handling_runs_under_its_own_trace_that_ends_with_it(
