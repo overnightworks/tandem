@@ -1,0 +1,8 @@
+claim_id = "f870d93f9e5f42eda0ba9f73b9cf20c6"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "e211cc24d1fed7f81788811a14ba4eba3a219ffd"
+branch = "claude/issue-18-tandem-0-5-0-leases-state-reads-a-holder"
+scope = ["README.md", "docs", "src", "tests"]
+opened_commit = "ee3f45c68e9a0118097c0a1891856b26ecedd65b"
+whole_reason = "One public read on Leases with its script, docs and the duty it clarifies."
