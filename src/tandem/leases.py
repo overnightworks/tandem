@@ -161,17 +161,20 @@ class Hold:
 async def _finished_despite_cancellation(cleanup: asyncio.Task[None]) -> None:
     """Wait for `cleanup` however often the caller is cancelled, then propagate the cancellation.
 
-    A shield alone raises in the cancelled caller at once and lets `cleanup` outlive it. A failure
-    of `cleanup` after a cancellation is logged and never replaces the cancellation.
+    A shield alone raises in the cancelled caller at once, lets `cleanup` outlive it and logs a
+    later failure of `cleanup` itself. A failure of `cleanup` after a cancellation is logged once
+    and never replaces the cancellation; a cancelled `cleanup` is no failure.
     """
     try:
-        await asyncio.shield(cleanup)
+        await asyncio.wait((cleanup,))
     except asyncio.CancelledError:
-        try:
-            await _finished_despite_cancellation(cleanup)
-        except Exception:
-            logger.exception("the cleanup failed after the cancellation of its caller")
+        while not cleanup.done():
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.wait((cleanup,))
+        if not cleanup.cancelled() and (failure := cleanup.exception()) is not None:
+            logger.error("the cleanup failed after the cancellation of its caller", exc_info=failure)
         raise
+    cleanup.result()
 
 
 class Leases:

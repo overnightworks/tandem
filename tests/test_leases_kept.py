@@ -251,3 +251,37 @@ async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_
     assert leases.ended is not end_fails
     logged = [record for record in caplog.records if record.name == "tandem.leases"]
     assert bool(logged) is end_fails
+
+
+async def test_cancelling_the_exit_and_its_cleanup_together_ends_the_task_cancelled_unlogged(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    caplog: pytest.LogCaptureFixture,
+):
+    leases = _GatedEnd(
+        make_client(redis_url),
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+    )
+    inside = asyncio.Event()
+
+    async def body() -> None:
+        async with leases.kept("pod-a", every=EVERY):
+            inside.set()
+            await asyncio.Event().wait()
+
+    earlier = asyncio.all_tasks()
+    task = asyncio.create_task(body())
+    await within(inside.wait())
+    task.cancel()
+    await within(leases.ending.wait())
+    with caplog.at_level(logging.DEBUG, logger="tandem.leases"):
+        for started_since in asyncio.all_tasks() - earlier:
+            started_since.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert task.cancelled()
+    assert not [record for record in caplog.records if record.name == "tandem.leases"]
