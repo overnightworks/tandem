@@ -57,6 +57,9 @@ async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
         await reader.next_resubscribed()
+        # A pooled connection makes the plain command fail inside the Retry; redis-py 5.x does not
+        # retry a handshake that fails on a fresh connection.
+        await client.ping()
         proxy.cut()
         plain_command = asyncio.ensure_future(client.ping())
         await proxy.attempts_reached(3)

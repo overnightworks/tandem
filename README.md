@@ -31,6 +31,7 @@ from datetime import timedelta
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
+from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import (
     Deadlines,
@@ -44,11 +45,13 @@ from tandem import (
     WakeChannel,
 )
 
-# The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1).
+# The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1);
+# on redis-py 5.x the client also needs retry_on_error=[ConnectionError, TimeoutError] for it.
 # The timeouts let `publish` fail on a Redis that stays silent (see the publish row).
 redis = Redis.from_url(
     "redis://redis:6379",
     retry=Retry(ExponentialBackoff(), 3),
+    retry_on_error=[ConnectionError, TimeoutError],
     socket_timeout=5,
     socket_connect_timeout=5,
 )
@@ -218,7 +221,9 @@ close that gap, two more cover deadlines, four cover leases and four cover locks
    disconnected is gone for good; the `Resubscribed` after the reconnect is the signal that anything may
    have changed. After a Redis restart the host's own client can still hold stale pooled connections, so
    the first command of that re-read fails with `ConnectionError` on a default `redis.asyncio` client. The
-   host's client therefore carries a `Retry`, as in the quick start, or the re-read retries itself.
+   host's client therefore carries a `Retry`, as in the quick start, or the re-read retries itself. On
+   redis-py 5.x the client also passes `retry_on_error` with `ConnectionError` and `TimeoutError`, or its
+   `Retry` replays nothing, a lost reply included; redis-py 8 retries those two without it.
 2. **After a failed `publish`, publish again or bound the readers' staleness.** `publish` fails on a silent
    Redis only under the client's `socket_timeout`, so the host sets it. A failure means the
    delivery is uncertain: the `PUBLISH` may never have reached Redis, or Redis delivered it and only the
