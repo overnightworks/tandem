@@ -484,24 +484,30 @@ class Leases:
         )
 
     async def _extend_while_pending(self, pending: set[Due]) -> None:
-        interval = self._claim_for.total_seconds() / _CLAIM_EXTENSIONS_PER_CLAIM
+        claim_seconds = self._claim_for.total_seconds()
+        runs_out_at = dict.fromkeys(pending, time.monotonic() + claim_seconds)
+        unextended: set[Due] = set()
         while True:
-            await asyncio.sleep(interval)
+            await asyncio.sleep(claim_seconds / _CLAIM_EXTENSIONS_PER_CLAIM)
             for due in tuple(pending):
                 fields = self._lease_fields(_lapse_of(due).holder)
-                try:
-                    kept = await self._lapses.extend(due)
-                except StoreError as error:
-                    logger.warning(
-                        "lapse_claim_extension.failed",
-                        extra={
-                            "reason": failure_reason(error),
-                            "error_type": type(error).__name__,
-                            **fields,
-                        },
-                    )
-                    pending.discard(due)
-                    continue
+                if due in unextended:
+                    kept = time.monotonic() < runs_out_at[due]
+                else:
+                    try:
+                        kept = await self._lapses.extend(due)
+                    except StoreError as error:
+                        logger.warning(
+                            "lapse_claim_extension.failed",
+                            extra={
+                                "reason": failure_reason(error),
+                                "error_type": type(error).__name__,
+                                **fields,
+                            },
+                        )
+                        unextended.add(due)
+                        continue
+                    runs_out_at[due] = time.monotonic() + claim_seconds
                 if not kept:
                     logger.warning("lapse_claim.expired", extra=fields)
                     pending.discard(due)

@@ -417,11 +417,20 @@ async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
         await running.received()
         await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
         (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
+        await log_lines.await_of("lapse_claim.expired", _LOGGER)
         running.release()
 
-    assert (line["level"], line["reason"]) == ("warning", "refused")
+    assert line["level"] == "warning"
+    assert line["reason"] == "refused"
     assert line["error_type"] == StoreError.__name__
-    assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
+    claim_events = [
+        written["event"]
+        for written in log_lines.of_logger(_LOGGER)
+        if written["event"].startswith("lapse_claim")
+    ]
+    assert claim_events == ["lapse_claim_extension.failed", "lapse_claim.expired"]
 
 
 async def test_a_claim_that_runs_out_is_logged_without_its_generation(
@@ -442,7 +451,9 @@ async def test_a_claim_that_runs_out_is_logged_without_its_generation(
         (line,) = await log_lines.await_of("lapse_claim.expired", _LOGGER)
         running.release()
 
-    assert (line["level"], line["lease_family"], line["holder_id"]) == ("warning", "owner", "pod-a")
+    assert line["level"] == "warning"
+    assert line["lease_family"] == "owner"
+    assert line["holder_id"] == "pod-a"
     log_lines.assert_none_holds(lapse.generation)
 
 
