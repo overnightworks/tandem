@@ -54,12 +54,14 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
         health_check_interval: float = 0,
         encoding: str = "utf-8",
         decode_responses: bool = False,
+        **client_options: Any,
     ) -> Redis:
         options: dict[str, Any] = {
             "socket_timeout": socket_timeout,
             "health_check_interval": health_check_interval,
             "encoding": encoding,
             "decode_responses": decode_responses,
+            **client_options,
         }
         if retry is not None:
             options["retry"] = retry

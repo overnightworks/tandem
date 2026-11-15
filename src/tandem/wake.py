@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from redis import exceptions as redis_errors
 from redis.asyncio import Redis
 from redis.asyncio.client import PubSub
+from redis.asyncio.connection import AbstractConnection
 
 from tandem.errors import StoreError
 from tandem.keys import wake_channel
@@ -34,17 +35,27 @@ class WakeChannel:
     async def publish(self, address: str) -> None:
         """Send one PUBLISH. A failure means the delivery is uncertain; nothing is retried."""
         # The client's own execute_command would run the PUBLISH under the client's Retry, which can
-        # send it again after a lost reply; the pooled connection is driven directly instead.
-        pool = self._redis.connection_pool
+        # send it again after a lost reply; the connection is driven directly instead.
+        redis = self._redis
         try:
-            connection = await pool.get_connection()
-            try:
-                await connection.send_command("PUBLISH", self._channel, address)
-                await connection.read_response()
-            finally:
-                await pool.release(connection)
+            await redis.initialize()
+            if (own := redis.connection) is not None:
+                # A single-connection client keeps the pool's connection and locks it.
+                async with redis._single_conn_lock:
+                    await self._send_publish(own, address)
+            else:
+                pool = redis.connection_pool
+                connection = await pool.get_connection()
+                try:
+                    await self._send_publish(connection, address)
+                finally:
+                    await pool.release(connection)
         except redis_errors.RedisError as error:
             raise StoreError(f"publish to {self._channel} failed: {error}") from error
+
+    async def _send_publish(self, connection: AbstractConnection, address: str) -> None:
+        await connection.send_command("PUBLISH", self._channel, address)
+        await connection.read_response()
 
     async def received(self) -> AsyncIterator[Wake | Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled."""

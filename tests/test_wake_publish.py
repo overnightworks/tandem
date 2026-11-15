@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 
 import pytest
@@ -81,4 +82,20 @@ async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_a
             Wake("orders/7"),
             Wake("barrier"),
         ]
+        assert reader.drain() == []
+
+
+async def test_a_single_connection_client_publishes_over_its_own_connection_beside_other_commands(
+    make_client: Callable[..., Redis], redis_url: str, key_prefix: str
+):
+    client = make_client(redis_url, single_connection_client=True, max_connections=1)
+    await client.ping()
+    publisher = WakeChannel(client, key_prefix=key_prefix)
+    addresses = [f"orders/{number}" for number in range(5)]
+    async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+
+        await asyncio.gather(client.ping(), *(publisher.publish(address) for address in addresses))
+
+        assert {await reader.next_wake() for _ in addresses} == {Wake(a) for a in addresses}
         assert reader.drain() == []
