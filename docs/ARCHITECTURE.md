@@ -171,9 +171,9 @@ dependency floors run the same tests.
 - Each `received()` opens one pub/sub connection of its own from the host's client: a subscribed connection
   cannot run other commands, and two readers must not share a subscription's lifetime.
 - `Resubscribed` is yielded for every `subscribe` confirmation Redis sends, including the one redis-py's own
-  re-subscription triggers inside the client's retry budget. redis-py 8.1 delivers that confirmation through
-  `get_message`, so tandem never copies the host's client settings and never changes the host's pool or
-  `Retry`.
+  re-subscription triggers inside the client's retry budget. Every redis-py the dependency range allows delivers that
+  confirmation through `get_message`, so tandem never copies the host's client settings and never changes the
+  host's pool or `Retry`.
 - `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
   wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
   borrows a connection from the host's pool and sends the one command itself. The host client's `Retry` still
