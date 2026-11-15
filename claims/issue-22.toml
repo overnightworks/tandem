@@ -1,0 +1,8 @@
+claim_id = "f195ba1c56b44dad8d86e4040745ec1a"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "b9ea3dc0e402d08d8643c83991affc2b684bfdd2"
+branch = "claude/issue-22-no-generation-in-lapse-log"
+scope = ["src/tandem/__init__.py", "src/tandem/leases.py", "tests"]
+opened_commit = "b8f3c913c55814e27c2109a0b06d4b10ae953dcf"
+whole_reason = "One log line, its regression test and the version raise belong to one patch release."
