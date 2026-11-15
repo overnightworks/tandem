@@ -40,7 +40,10 @@ class WakeChannel:
         try:
             await redis.initialize()
             if (own := redis.connection) is not None:
-                # A single-connection client keeps the pool's connection and locks it.
+                # A single-connection client keeps the pool's connection and serializes its own
+                # commands on this lock. redis-py offers no public way to take it without running
+                # the command through its Retry, so this relies on the private attribute, as the
+                # client's own execute_command does; a rename in redis-py breaks this line.
                 async with redis._single_conn_lock:
                     await self._send_publish(own, address)
             else:
