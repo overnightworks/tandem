@@ -65,8 +65,10 @@ async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
 ):
     leases = new_leases(make_client(url_with_wrong_password), lasts=LASTS)
 
+    held = leases.kept("pod-a", every=EVERY)
+
     with pytest.raises(StoreError):
-        async with leases.kept("pod-a", every=EVERY):
+        async with held:
             pytest.fail("the body must not run")
 
 

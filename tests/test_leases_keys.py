@@ -64,9 +64,10 @@ def test_a_lasts_or_claim_for_that_is_no_positive_timedelta_fails_loud(
     value: object,
 ):
     options = {"lasts": timedelta(seconds=30), "claim_for": timedelta(seconds=30)}
+    client = make_client(redis_url)
 
     with pytest.raises(ValueError, match=argument):
-        new_leases(make_client(redis_url), **{**options, argument: value})
+        new_leases(client, **{**options, argument: value})
 
 
 @pytest.mark.parametrize(
