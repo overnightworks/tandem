@@ -172,7 +172,7 @@ async def _finished_despite_cancellation(cleanup: asyncio.Task[None]) -> None:
             with contextlib.suppress(asyncio.CancelledError):
                 await asyncio.wait((cleanup,))
         if not cleanup.cancelled() and (failure := cleanup.exception()) is not None:
-            logger.error("the cleanup failed after the cancellation of its caller", exc_info=failure)
+            logger.error("the cleanup failed after its caller was cancelled", exc_info=failure)
         raise
     cleanup.result()
 
