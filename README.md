@@ -186,6 +186,7 @@ async def train_on_gpu(job: Job) -> None:
 | `wake_channel(key_prefix)` | The name of the wake channel, for `tandem.wake`. |
 | `DeadlineKeys` | The record `deadlines.keys` returns. |
 | `StoreError` | Redis refused or timed out; the cause is chained. |
+| `tandem.testing.settle_epoch(redis, *, key_prefix)` | Test-only helper for a host's tests (`await`, with a `redis.asyncio.Redis`): sets the app's epoch so far in the past that every lease and lock family of `key_prefix` reads settled at once, with no knowledge of tandem's key layout. Production code that settles the epoch breaks the restart grace: after a Redis restart it reads GONE or free for what Redis lost, where it must read UNKNOWN until `lasts` have passed. |
 
 The leases of a family live in `<key_prefix>:tandem:v1:l:<family>:expiry` and `...:generation`, its lapse
 queue in `...:l:<family>:lapse:{due,claimed,claim}` and the app's epoch in `<key_prefix>:tandem:v1:epoch`,

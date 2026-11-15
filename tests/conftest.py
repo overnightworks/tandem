@@ -15,7 +15,7 @@ from redis.asyncio.retry import Retry
 from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import Client, Deadlines, Leases, Locks
-from tandem.keys import lock_keys
+from tandem.testing import settle_epoch
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.locks import FAMILY
@@ -84,7 +84,7 @@ def new_leases(key_prefix: str) -> Callable[..., Leases]:
 @pytest.fixture
 async def settled_epoch(observer: Redis, key_prefix: str) -> None:
     """The app's epoch set far in the past, so a lock reads free at once until a test wipes it."""
-    await observer.set(lock_keys(key_prefix, FAMILY).epoch, 0)
+    await settle_epoch(observer, key_prefix=key_prefix)
 
 
 @pytest.fixture

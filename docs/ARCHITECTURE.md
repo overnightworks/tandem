@@ -43,7 +43,11 @@ Module owners in `tandem`:
 - `script` owns `Script`: it prepends `LUA_KIT`, runs by SHA and reloads on `NOSCRIPT`.
 - `client` owns the exported `Client` type.
 - `keys` owns the names tandem gives in Redis: the check of a key prefix and a kind, the wake channel and the
-  `DeadlineKeys` of a kind, the `LeaseKeys` of a family and the `LockKeys` of a family.
+  `DeadlineKeys` of a kind, the app's epoch key, the `LeaseKeys` of a family and the `LockKeys` of a
+  family.
+- `testing` owns `settle_epoch`: the one helper for a host's tests, which ages the app's epoch through
+  `keys`. It imports nothing beyond `redis` and `tandem`; `tandem.__all__` lists `testing`, which makes it
+  public.
 - `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage
   (a lost connection or a timeout) or a refusal, and the back-off both loops use.
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
@@ -51,8 +55,8 @@ Module owners in `tandem`:
 
 `wake` and `script` use `client` and `errors` (`wake`, `leases` and `locks` also use `logline`); `deadlines`
 uses `script` and `keys`; `leases` uses `deadlines`, `script`, `keys` and `errors`; `locks` uses `deadlines`
-(its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`. Anything that is the name
-of a Redis key or channel is built in `keys`.
+(its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`; `testing` uses `keys`.
+Anything that is the name of a Redis key or channel is built in `keys`.
 
 ## 3. Runtime View
 
@@ -171,9 +175,9 @@ dependency floors run the same tests.
 - Each `received()` opens one pub/sub connection of its own from the host's client: a subscribed connection
   cannot run other commands, and two readers must not share a subscription's lifetime.
 - `Resubscribed` is yielded for every `subscribe` confirmation Redis sends, including the one redis-py's own
-  re-subscription triggers inside the client's retry budget. Every redis-py the dependency range allows delivers that
-  confirmation through `get_message`, so tandem never copies the host's client settings and never changes the
-  host's pool or `Retry`.
+  re-subscription triggers inside the client's retry budget. The two redis-py versions CI runs, the locked one
+  and the lowest the range allows, deliver that confirmation through `get_message`, so tandem never copies
+  the host's client settings and never changes the host's pool or `Retry`.
 - `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
   wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
   borrows a connection from the host's pool and sends the one command itself. The host client's `Retry` still
