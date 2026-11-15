@@ -13,7 +13,7 @@ flowchart LR
     subgraph podB["Pod B of the host app"]
         tandemB["tandem<br/>WakeChannel"] -- "Wake, Resubscribed" --> hostB["Host code"]
     end
-    tandemA -- "PUBLISH" --> redis[("Redis<br/>one channel per app")]
+    tandemA -- "PUBLISH" --> redis[("Redis<br/>one channel per key prefix")]
     redis -- "message, subscribe confirmation" --> tandemB
 ```
 
