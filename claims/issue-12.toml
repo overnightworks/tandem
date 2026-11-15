@@ -1,7 +1,0 @@
-claim_id = "1bf16652d69c498fa5b412e41f234faa"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "9acff5777dae1fa7eabb769b2ce2e1e0f94fc576"
-branch = "claude/issue-12-readme-moves-existing-copies-now"
-scope = ["README.md"]
-opened_commit = "4c5936d07c003c712782eda90d3caeeacb2d3473"
