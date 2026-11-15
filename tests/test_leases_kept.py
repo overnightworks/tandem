@@ -1,5 +1,6 @@
 import asyncio
-from collections.abc import Callable
+import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -70,6 +71,32 @@ async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
     with pytest.raises(StoreError):
         async with held:
             pytest.fail("the body must not run")
+
+
+async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_runs_on(
+    url_denying: Callable[[str], Awaitable[str]],
+    redis_url: str,
+    observer: Redis,
+    key_prefix: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    caplog: pytest.LogCaptureFixture,
+):
+    holder_pod = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
+    observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
+
+    async def alive() -> bool:
+        return (await observer_pod.liveness(["pod-a"]))["pod-a"] is Liveness.ALIVE
+
+    with caplog.at_level(logging.WARNING, logger="tandem.leases"):
+        async with holder_pod.kept("pod-a", every=EVERY):
+            await observer.acl_setuser(key_prefix, commands=["-evalsha"])
+            await until_gone(observer_pod, "pod-a")
+            await observer.acl_setuser(key_prefix, commands=["+evalsha"])
+            await until(alive)
+
+    levels = {record.levelno for record in caplog.records if record.name == "tandem.leases"}
+    assert levels == {logging.ERROR}
 
 
 async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(

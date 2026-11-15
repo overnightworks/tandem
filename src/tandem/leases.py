@@ -226,8 +226,9 @@ class Leases:
         """Hold `holder`'s lease for the block: renew now, then every `every`, and end it at exit.
 
         The first renewal completes before the block runs and raises `StoreError` out of the entry.
-        A later failed renewal is logged and retried, and never ends the block. At exit an
-        in-flight renewal completes, then the current generation ends, shielded from cancellation.
+        A later failed renewal, an outage or a refusal, is logged as an error and retried after
+        `every`, and never ends the block. At exit an in-flight renewal completes, then the current
+        generation ends, shielded from cancellation.
         """
         if checked_span(every, argument="every") >= self._lasts:
             raise ValueError(f"every must be below lasts ({self._lasts}), got {every!r}")
@@ -255,22 +256,15 @@ class Leases:
     async def _renew_until(
         self, stopping: asyncio.Event, holder: str, every_seconds: float, hold: Hold
     ) -> None:
-        wait = every_seconds
-        backoff = BACKOFF_FIRST_SECONDS
         while True:
             with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stopping.wait(), wait)
+                await asyncio.wait_for(stopping.wait(), every_seconds)
             if stopping.is_set():
                 return
             try:
                 hold.generation = (await self.renew(holder)).generation
-            except StoreError as error:
-                logger.warning("the renewal of the lease of %s failed: %s", holder, error)
-                wait = min(backoff, every_seconds) if error.outage else every_seconds
-                backoff = next_backoff(backoff)
-            else:
-                wait = every_seconds
-                backoff = BACKOFF_FIRST_SECONDS
+            except StoreError:
+                logger.exception("the renewal of the lease of %s failed", holder)
 
     async def serve_lapses(
         self,
