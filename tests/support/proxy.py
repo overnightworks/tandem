@@ -46,7 +46,10 @@ class TcpProxy:
         assert self._server is not None
         self._server.close()
         self._drop_connections()
-        await asyncio.gather(*self.tasks, return_exceptions=True)
+        held = tuple(self.tasks)
+        for task in held:
+            task.cancel()
+        await asyncio.gather(*held, return_exceptions=True)
         await self._server.wait_closed()
 
     def cut(self) -> None:
@@ -93,6 +96,7 @@ class TcpProxy:
         try:
             await self._relay(client_reader, client_writer)
         finally:
+            client_writer.close()
             self.tasks.discard(handler)
 
     async def _relay(
