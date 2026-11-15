@@ -137,8 +137,12 @@ dependency floors run the same tests.
   `kind` appears only after `d:` and before a fixed suffix.
 - Tokens are 128 random bits from `secrets`, generated in Python and passed as arguments, since Lua's random
   is not fit for them. Each claim gets a fresh one.
-- Scripts run through the host's client, so its `Retry` can run one again after a lost reply. `set`,
-  `cancel` and `extend` repeat harmlessly; a claim whose reply is lost expires and is claimed again, which
+- Scripts run through the host's client, so its `Retry` can run one again after a lost reply. A replay is
+  harmless only while nothing else touched the key in between: `set` replaces the due time and invalidates
+  any claim, and `cancel` removes whatever the key currently is, and neither tells a replay from a new
+  operation. A retried `cancel` can therefore delete a deadline another pod armed after the first `cancel`
+  ran, and a retried `set` can overwrite a newer due time or invalidate a newer claim. `extend` repeats
+  harmlessly, since it needs the token. A claim whose reply is lost expires and is claimed again, which
   keeps "at least once"; a repeated `done` answers False although the first finished.
 
 ## 7. Not chosen

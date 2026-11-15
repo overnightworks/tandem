@@ -115,7 +115,7 @@ refuses outright, such as a subscribe the ACL denies or credentials Redis reject
 
 The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`, disjoint
 from the channel and from every other kind. `claim_for` is the same for every pod of one kind. A claim whose
-reply is lost to a retry of the host's client expires after `claim_for` and then reaches a claimer again.
+reply is lost to a retry of the host's client expires after `claim_for` and then reaches a claimer again. A `set` or `cancel` that the client's `Retry` runs again cannot tell a replay from a new operation: if another pod re-armed the key in between, a replayed `cancel` removes the new deadline and a replayed `set` overwrites its due time or invalidates its claim.
 
 ## The host's duties
 
