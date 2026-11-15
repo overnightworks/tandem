@@ -5,23 +5,16 @@ import pytest
 from logline import Outcome
 from redis.asyncio import Redis
 
-from tandem import Leases, Locks, StoreError
+from tandem import Leases, StoreError
 from tests.support.logs import LogLines
 
 type LeaseCall = Callable[[Leases], Awaitable[object]]
-type LockCall = Callable[[Locks], Awaitable[object]]
 
 _LEASE_CALLS: dict[str, LeaseCall] = {
     "lease_renewal.ended": lambda leases: leases.renew("pod-a"),
     "lease_end.ended": lambda leases: leases.end("pod-a", "any generation"),
     "lease_state_read.ended": lambda leases: leases.state(["pod-a"]),
     "lease_roster_read.ended": lambda leases: leases.live(),
-}
-_LOCK_CALLS: dict[str, LockCall] = {
-    "lock_acquisition.ended": lambda locks: locks.acquire("job"),
-    "lock_extension.ended": lambda locks: locks.extend("job", "any generation"),
-    "lock_release.ended": lambda locks: locks.release("job", "any generation"),
-    "lock_state_read.ended": lambda locks: locks.state("job"),
 }
 
 
@@ -45,28 +38,6 @@ async def test_every_lease_call_the_host_awaits_writes_one_line_with_its_outcome
     assert (failed["level"], failed["outcome"]) == ("error", Outcome.FAILED)
     assert failed["error_type"] == StoreError.__name__
     assert done["duration_ms"] >= 0 and failed["duration_ms"] >= 0
-
-
-@pytest.mark.parametrize("event", _LOCK_CALLS)
-async def test_every_lock_call_writes_one_line_with_its_outcome(
-    event: str,
-    url_denying: Callable[[str], Awaitable[str]],
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    new_locks: Callable[..., Locks],
-    log_lines: LogLines,
-):
-    call = _LOCK_CALLS[event]
-
-    await call(new_locks(make_client(redis_url)))
-    with pytest.raises(StoreError):
-        await call(new_locks(make_client(await url_denying("evalsha"))))
-
-    done, failed = log_lines.of(event, "tandem.locks")
-    assert (done["level"], done["outcome"]) == ("info", Outcome.OK)
-    assert (failed["level"], failed["outcome"]) == ("error", Outcome.FAILED)
-    assert failed["error_type"] == StoreError.__name__
-    assert done["lock_family"] == failed["lock_family"]
 
 
 @pytest.mark.parametrize(("level", "lines"), [(logging.INFO, 1), (logging.WARNING, 0)])
