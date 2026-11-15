@@ -57,13 +57,18 @@ def _app(key_prefix: str) -> str:
     return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1"
 
 
+def epoch_key(key_prefix: str) -> str:
+    """The app's epoch, which every lease and lock family of `key_prefix` shares."""
+    return f"{_app(key_prefix)}:epoch"
+
+
 def lease_keys(key_prefix: str, family: str) -> LeaseKeys:
     """The keys of the leases of `family` in the app that owns `key_prefix`."""
     app = _app(key_prefix)
     base = f"{app}:l:{checked_segment(family, argument='family')}"
     lapse = f"{base}:lapse"
     return LeaseKeys(
-        epoch=f"{app}:epoch",
+        epoch=epoch_key(key_prefix),
         expiry=f"{base}:expiry",
         generation=f"{base}:generation",
         lapse=DeadlineKeys(due=f"{lapse}:due", claimed=f"{lapse}:claimed", claim=f"{lapse}:claim"),
@@ -87,4 +92,6 @@ def lock_keys(key_prefix: str, family: str) -> LockKeys:
     """The keys of the locks of `family` in the app that owns `key_prefix`."""
     app = _app(key_prefix)
     base = f"{app}:lock:{checked_segment(family, argument='family')}"
-    return LockKeys(epoch=f"{app}:epoch", expiry=f"{base}:expiry", generation=f"{base}:generation")
+    return LockKeys(
+        epoch=epoch_key(key_prefix), expiry=f"{base}:expiry", generation=f"{base}:generation"
+    )
