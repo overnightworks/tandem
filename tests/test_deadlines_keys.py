@@ -26,9 +26,10 @@ def test_a_kind_or_prefix_that_is_no_segment_fails_at_construction_naming_the_ar
 ):
     arguments = {"key_prefix": "skat", "kind": "work", argument: value}
     client = backend.new_client()
+    claim_for = timedelta(seconds=1)
 
     with pytest.raises(ValueError, match=argument):
-        Deadlines(client, claim_for=timedelta(seconds=1), **arguments)
+        Deadlines(client, claim_for=claim_for, **arguments)
 
 
 @pytest.mark.parametrize("claim_for", [timedelta(0), timedelta(seconds=-1)])
