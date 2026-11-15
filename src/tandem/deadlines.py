@@ -121,13 +121,14 @@ class Deadlines:
     async def claim_due(
         self,
         *,
-        claimer: str,  # NOSONAR(python:S1172) - the signature names the claimer, no record kept
+        claimer: str,
         limit: int,
     ) -> list[Due]:
         """Claim up to `limit` keys that are due or whose claim expired, each under a fresh token.
 
         `claimer` names the caller; tandem keeps no record of it.
         """
+        del claimer
         if limit < 1:
             raise ValueError(f"limit must be at least 1, got {limit!r}")
         tokens = [secrets.token_hex(_TOKEN_BYTES) for _ in range(limit)]
