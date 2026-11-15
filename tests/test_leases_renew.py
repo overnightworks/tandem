@@ -5,6 +5,7 @@ from datetime import timedelta
 from redis.asyncio import Redis
 
 from tandem import Leases, Liveness, Renewal
+from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import Handled, serving, until_gone
 from tests.support.waiting import until
@@ -106,3 +107,27 @@ async def test_an_expired_lease_reaches_a_handler_once_and_a_renewal_after_it_st
     assert renewal.started is True
     assert renewal.generation != old.generation
     assert lapse.generation == old.generation
+
+
+async def test_end_and_the_sweep_drop_the_holder_from_the_generation_record(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS)
+    generations = lease_keys(key_prefix, "owner").generation
+    ended = await leases.renew("pod-ended")
+    await leases.renew("pod-lapsed")
+    assert await observer.hlen(generations) == 2
+
+    await leases.end("pod-ended", ended.generation)
+    assert not await observer.hexists(generations, "pod-ended")
+    await until_gone(leases, "pod-lapsed")
+
+    async def swept() -> bool:
+        return await observer.hlen(generations) == 0
+
+    async with serving(leases, Handled()):
+        await until(swept)
