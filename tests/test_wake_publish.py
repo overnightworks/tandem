@@ -111,6 +111,7 @@ async def test_a_single_connection_client_without_the_lock_tandem_relies_on_fail
     key_prefix: str,
 ):
     client = cast(Redis, _SingleConnectionClientWithoutTheLock())
+    channel = WakeChannel(client, key_prefix=key_prefix)
 
     with pytest.raises(RuntimeError, match="_single_conn_lock"):
-        await WakeChannel(client, key_prefix=key_prefix).publish("orders/7")
+        await channel.publish("orders/7")
