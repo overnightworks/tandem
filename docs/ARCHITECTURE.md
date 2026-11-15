@@ -3,7 +3,7 @@
 ## 1. Context and Scope
 
 tandem runs inside each pod of a host app, with no server or storage of its own; its one neighbour is the
-Redis the host already uses. Host developers start at the [README](../README.md).
+Redis the host already uses, whose clock (`TIME`) stamps every deadline. Host developers start at the [README](../README.md).
 
 ```mermaid
 flowchart LR
@@ -26,12 +26,20 @@ Module owners in `tandem`:
 
 - `wake` owns `WakeChannel`, `Wake` and `Resubscribed`: the `PUBLISH`, the dedicated pub/sub connection of
   each `received()`, the translation of Redis's messages into events and the back-off loop around them.
-- `keys` owns the names tandem gives in Redis: the check of a key prefix and the wake channel built from it.
-- `errors` owns `StoreError`.
+- `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
+  generates in Python because Lua's random is not fit.
+- `lua` owns `LUA_KIT`: the one implementation of each transition that both `Deadlines` and a host's script
+  run (`now_ms`, `deadline_set`, `deadline_cancel`, `deadline_state`, `wake`).
+- `script` owns `Script`: it prepends `LUA_KIT`, runs by SHA and reloads on `NOSCRIPT`.
+- `client` owns the exported `Client` type.
+- `keys` owns the names tandem gives in Redis: the check of a key prefix and a kind, the wake channel and the
+  `DeadlineKeys` of a kind.
+- `errors` owns `StoreError` and the one mapping of a Redis failure onto it.
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
   reader that steps through events, and a minimal host.
 
-`wake` uses `keys` and `errors`. Anything that is the name of a Redis key or channel is built in `keys`.
+`wake` and `script` use `client` and `errors`; `deadlines` uses `script` and `keys`; `script` uses `lua`. Anything
+that is the name of a Redis key or channel is built in `keys`.
 
 ## 3. Runtime View
 
@@ -58,6 +66,26 @@ sequenceDiagram
     W-->>H: Resubscribed
 ```
 
+A deadline is in one of three places, and every arrow is one Lua script on Redis `TIME`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Waiting: set (due ZSET)
+    Waiting --> Waiting: set again
+    Waiting --> Claimed: claim_due, due reached (new token)
+    Claimed --> Claimed: extend, token current and unexpired
+    Claimed --> Claimed: claim_due, claim expired (new token)
+    Claimed --> Waiting: set (token void)
+    Claimed --> [*]: done, token current
+    Waiting --> [*]: cancel
+    Claimed --> [*]: cancel (token void)
+```
+
+Per kind there are three structures: a due ZSET scored by the due time in ms on `TIME`, a claimed ZSET scored
+by the claim's expiry and a HASH from key to the current token. Because the HASH holds one token per key, a
+claim is valid exactly while its token is the current one, so `set`, `cancel` and a takeover void the old
+claim by replacing or deleting that token, in the same script that moves the key.
+
 ## 4. Deployment View
 
 A library in the host's environment. The host installs it by a pinned git tag and builds a `WakeChannel` on
@@ -70,7 +98,8 @@ publish and subscribe. The channel carries addresses, never contents: whoever ca
 pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an out-of-memory refusal)
 surfaces as `StoreError`.
 
-**Failure.** `publish` reports every failure as `StoreError` and says nothing of whether the wake arrived.
+**Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines` and `Script`, is a `StoreError`;
+`publish` says nothing of whether the wake arrived.
 `received()` survives every connection failure and ends only on cancellation or a refusal.
 
 **Proof strategy.** The tests run every cell against a real Redis in a throwaway container started by
@@ -100,6 +129,18 @@ dependency floors run the same tests.
 - On cancellation `received()` unsubscribes and closes its connection, so a cancelled reader leaves no
   subscriber and no connection behind.
 
+- Every deadline transition is one Lua script that reads `TIME`, so no pod clock is involved and a transition
+  cannot interleave with another. Redis does not roll a script back: a script that fails after a write keeps
+  the write, so a script checks before it writes.
+- A deadline key is a ZSET member and a HASH field, never a key segment, so a free-form key cannot reach a
+  fixed key. The segment after `v1` is one of the fixed tokens `wake`, `epoch`, `d` and `l`, and a caller's
+  `kind` appears only after `d:` and before a fixed suffix.
+- Tokens are 128 random bits from `secrets`, generated in Python and passed as arguments, since Lua's random
+  is not fit for them. Each claim gets a fresh one.
+- Scripts run through the host's client, so its `Retry` can run one again after a lost reply. `set`,
+  `cancel` and `extend` repeat harmlessly; a claim whose reply is lost expires and is claimed again, which
+  keeps "at least once"; a repeated `done` answers False although the first finished.
+
 ## 7. Not chosen
 
 - Redis Streams: they keep history and need consumer groups, offsets and trimming; a re-read at
@@ -111,6 +152,7 @@ dependency floors run the same tests.
 
 ## 8. Risks and Technical Debt
 
+- A Redis restart takes every deadline and claim with it; the host's reconcile pass sets them again.
 - Redis pub/sub is at most once: a wake published while a pod's subscription is down is lost, and only the
   host's re-read at `Resubscribed` and its handling of a failed `publish` bring the pods back in line.
 - `received()` blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies
