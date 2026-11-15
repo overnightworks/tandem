@@ -230,10 +230,10 @@ handler gets an ordinary record at its own level and handler, the fields kept. t
 | `wake_publication.ended` | `tandem.wake` | info; error when it failed | `outcome`, `duration_ms`; `error_type` when failed |
 | `lease_renewal.failed`, a background renewal of `kept` | `tandem.leases` | warning | `reason` (`outage` or `refused`), `error_type`, `lease_family`, `holder_id` |
 | `lease_end.failed`, the end at the exit of `kept` failed after a cancellation | `tandem.leases` | error | `error_type`, `lease_family`, `holder_id` |
-| `lapse_handling.ended`, one `handle` of `serve_lapses` | `tandem.leases` | info; error with a traceback when it failed | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
+| `lapse_handling.ended`, one `handle` of `serve_lapses` | `tandem.leases` | info; error when it failed, with a traceback unless the failure holds a `StoreError`, which names Redis | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
 | `lapse_round.ended`, one round of `serve_lapses` | `tandem.leases` | info with lapses; debug without; warning when an outage failed the round | `outcome`, `duration_ms`, `lease_family`, `lapse_count`, `failed_count` |
 | `lapse_claim_extension.failed` | `tandem.leases` | warning | `reason`, `error_type`, `lease_family`, `holder_id` |
-| `lapse_claim.expired` | `tandem.leases` | warning | `lease_family`, `holder_id` |
+| `lapse_claim.expired`, a claim that ran out after its extension was refused or answered false; never after an outage, whose result is unknown | `tandem.leases` | warning | `lease_family`, `holder_id` |
 | `wake_subscription.lost`, once per outage; its further attempts | `tandem.wake` | warning; debug | `reason` (`outage`), `error_type`, `failed_attempt_count` |
 | `wake_subscription.confirmed`, each `Resubscribed` | `tandem.wake` | info | `failed_attempt_count` |
 | `wake_payload.skipped` | `tandem.wake` | warning | `reason` (`invalid_utf8`), `payload_bytes` |
