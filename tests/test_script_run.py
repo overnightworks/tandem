@@ -39,7 +39,8 @@ async def test_a_script_writes_a_deadline_and_a_wake_that_are_visible_together(
 
 
 @pytest.mark.parametrize(
-    "traceparent", [None, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"]
+    "traceparent",
+    [None, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01", "not-a-trace"],
 )
 @pytest.mark.parametrize("address", ["orders/7", "12:orders", "caf\u00e9"])
 async def test_a_script_wakes_with_the_trace_it_is_given_or_none(

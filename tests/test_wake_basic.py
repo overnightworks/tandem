@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator, Callable
 from typing import cast
 
 import pytest
-from logline import unit_trace
+from logline import current_traceparent, unit_trace
 from redis.asyncio import Redis
 
 from tandem import Resubscribed, StoreError, Wake, WakeChannel, checked_segment
@@ -87,12 +87,13 @@ async def test_a_wake_arrives_with_its_address_and_the_trace_of_its_sender(
         await reader.next_resubscribed()
 
         with unit_trace(_INCOMING_TRACEPARENT):
+            sent = current_traceparent()
             await publisher.publish(address)
 
         wake = await reader.next_wake()
-    assert wake.address == address
-    assert wake.traceparent is not None
-    assert wake.traceparent.split("-")[1] == _TRACE_ID
+    assert wake == Wake(address, sent)
+    assert sent is not None
+    assert sent.split("-")[1] == _TRACE_ID
 
 
 @pytest.mark.parametrize(
