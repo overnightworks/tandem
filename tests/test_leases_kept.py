@@ -162,6 +162,7 @@ async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_tra
     )
 
     async with leases.kept("pod-a", every=EVERY) as hold:
+        entered = hold.generation
         proxy.cut()
 
         async def failure_logged() -> bool:
@@ -175,6 +176,7 @@ async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_tra
     assert (first["level"], first["reason"]) == ("warning", "outage")
     assert first["error_type"] == StoreError.__name__
     assert "exception" not in first
+    log_lines.assert_none_holds(entered)
     log_lines.assert_none_holds(generation)
 
 
@@ -249,6 +251,38 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
     await until_gone(leases, "pod-a")
     await until_redis_ms(client, await redis_ms(client) + 3 * 100)
     assert await liveness_of(leases, "pod-a") is Liveness.GONE
+
+
+@pytest.mark.parametrize("end_fails", [False, True])
+async def test_an_uncancelled_exit_writes_lease_end_ended_like_a_direct_end(
+    end_fails: bool,
+    url_denying: Callable[[str], Awaitable[str]],
+    observer: Redis,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    leases = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
+
+    async def hold_then_exit() -> None:
+        async with leases.kept("pod-a", every=EVERY):
+            if end_fails:
+                await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+
+    if end_fails:
+        with pytest.raises(StoreError):
+            await hold_then_exit()
+    else:
+        await hold_then_exit()
+
+    (line,) = log_lines.of("lease_end.ended", "tandem.leases")
+    assert (line["level"], line["outcome"]) == (
+        ("error", "failed") if end_fails else ("info", "ok")
+    )
+    assert line.get("error_type") == (StoreError.__name__ if end_fails else None)
+    assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+    assert not log_lines.of("lease_end.failed", "tandem.leases")
 
 
 @pytest.mark.parametrize("end_fails", [False, True])

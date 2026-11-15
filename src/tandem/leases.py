@@ -336,10 +336,11 @@ class Leases:
         try:
             yield hold
         finally:
-            await _finished_despite_cancellation(
-                asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
-                self._lease_fields(holder),
-            )
+            async with StepTimer("lease_end.ended", logger, **self._lease_fields(holder)):
+                await _finished_despite_cancellation(
+                    asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
+                    self._lease_fields(holder),
+                )
 
     async def _finish(
         self, stopping: asyncio.Event, renewer: asyncio.Task[None], holder: str, hold: Hold

@@ -240,8 +240,8 @@ handler gets an ordinary record at its own level and handler, the fields kept. t
 
 - `outcome` is `ok`, `failed` or `cancelled`; a failed call raises `StoreError` after its line, and a
   `False` or `None` answer is `ok`. A `kept` writes `lease_renewal.ended` for its first renewal only: its
-  background renewals write a line only when one fails, and its end at the exit writes a line only when a
-  cancellation hides the failure.
+  background renewals write a line only when one fails, and its end at the exit writes `lease_end.ended`
+  like a direct `end`; when a cancellation hides a failed end, `lease_end.failed` is its one error line.
 - A refusal that reaches the host as `StoreError` out of `serve_lapses` or `received()` writes no line:
   the host's layer logs it.
 - A holder is an id (see duty 14), so `holder_id` is the holder string. No line carries a generation, a lapse's
