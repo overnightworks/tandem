@@ -36,6 +36,23 @@ class _GatedLeases(Leases):
         return await super().renew(holder)
 
 
+class _GatedEnd(Leases):
+    """Leases whose `end` waits at a gate the test opens, and records that it completed."""
+
+    def __init__(self, *args: Any, **keywords: Any) -> None:
+        super().__init__(*args, **keywords)
+        self.ending = asyncio.Event()
+        self.gate = asyncio.Event()
+        self.ended = False
+
+    async def end(self, holder: str, generation: str) -> bool:
+        self.ending.set()
+        await self.gate.wait()
+        ended = await super().end(holder, generation)
+        self.ended = True
+        return ended
+
+
 async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
@@ -152,3 +169,33 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
     await until_gone(leases, "pod-a")
     await until_redis_ms(client, await redis_ms(client) + 3 * 100)
     assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.GONE}
+
+
+async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_propagates(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    leases = _GatedEnd(
+        make_client(redis_url),
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+    )
+
+    inside = asyncio.Event()
+
+    async def body() -> None:
+        async with leases.kept("pod-a", every=EVERY):
+            inside.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(body())
+    await within(inside.wait())
+    task.cancel()
+    await within(leases.ending.wait())
+    task.cancel()
+    leases.gate.set()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert task.cancelled()
+    assert leases.ended

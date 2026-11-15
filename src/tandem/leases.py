@@ -158,6 +158,21 @@ class Hold:
     generation: str
 
 
+async def _finished_despite_cancellation(cleanup: asyncio.Task[None]) -> None:
+    """Wait for `cleanup` however often the caller is cancelled, then propagate the cancellation.
+
+    A shield alone raises in the cancelled caller at once and lets `cleanup` outlive it.
+    """
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 class Leases:
     def __init__(
         self,
@@ -228,7 +243,7 @@ class Leases:
         The first renewal completes before the block runs and raises `StoreError` out of the entry.
         A later failed renewal, an outage or a refusal, is logged as an error and retried after
         `every`, and never ends the block. At exit an in-flight renewal completes, then the current
-        generation ends, shielded from cancellation.
+        generation ends, even when the exit is cancelled; the cancellation then propagates.
         """
         if checked_span(every, argument="every") >= self._lasts:
             raise ValueError(f"every must be below lasts ({self._lasts}), got {every!r}")
@@ -244,7 +259,9 @@ class Leases:
         try:
             yield hold
         finally:
-            await asyncio.shield(self._finish(stopping, renewer, holder, hold))
+            await _finished_despite_cancellation(
+                asyncio.create_task(self._finish(stopping, renewer, holder, hold))
+            )
 
     async def _finish(
         self, stopping: asyncio.Event, renewer: asyncio.Task[None], holder: str, hold: Hold
