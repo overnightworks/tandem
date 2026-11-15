@@ -70,6 +70,9 @@ jobs:
       - name: Install the lowest declared versions
         run: uv pip install --resolution lowest-direct -e . --group dev # NOSONAR(S8541,S8544) the project builds itself from this checkout and lowest-direct resolves the declared floors on purpose so it has no lock
 
+      - name: Install the declared logline floor
+        run: uv pip install "overnightworks-logline @ git+https://github.com/overnightworks/logline@v0.3.0" # NOSONAR(S8541,S8544) logline is not on an index, so the floor the range declares comes from its git tag; the dev group's source pins the newer end
+
       - name: Tests against a throwaway Redis
         run: scripts/run_redis_tests.sh tests -q -n auto
 
