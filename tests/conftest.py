@@ -1,6 +1,7 @@
+import fcntl
 import os
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import timedelta
 from typing import Any
 
@@ -165,9 +166,17 @@ def held_backoffs() -> Backoffs:
 
 
 @pytest.fixture
-def restartable_redis_url() -> str:
-    """The URL of the server a test may shut down; Docker's restart policy brings it back."""
-    return _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL")
+def restartable_redis_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
+    """The URL of the server a test may shut down or flush; Docker's restart policy brings it back.
+
+    One test at a time holds the server, across xdist workers, because a shutdown or a script flush is
+    state every other user of it would observe.
+    """
+    url = _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL")
+    lock_path = tmp_path_factory.getbasetemp().parent / "restartable-redis.lock"
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        yield url
 
 
 @pytest.fixture
