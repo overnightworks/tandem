@@ -323,10 +323,11 @@ def _store_error_inside_a_group() -> Exception:
 
 def _host_error_raised_from_another() -> Exception:
     try:
-        raise KeyError("the host's own failure")
-    except KeyError as first:
-        wrapped = ValueError("the host gave up")
-        wrapped.__cause__ = first
+        try:
+            raise KeyError("the host's own failure")
+        except KeyError as first:
+            raise ValueError("the host gave up") from first
+    except ValueError as wrapped:
         return wrapped
 
 
