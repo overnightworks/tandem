@@ -26,8 +26,9 @@ tandem, whose tag the host pins.
 
 Module owners in `tandem`:
 
-- `wake` owns `WakeChannel`, `Wake` and `Resubscribed`: the `PUBLISH`, the dedicated pub/sub connection of
-  each `received()`, the translation of Redis's messages into events and the back-off loop around them.
+- `wake` owns `WakeChannel`, `Wake` and `Resubscribed`: the `PUBLISH`, the frame of a wake's payload, the
+  dedicated pub/sub connection of each `received()`, the translation of Redis's messages into events and the
+  back-off loop around them.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
 - `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end,
@@ -153,7 +154,7 @@ on a refusal; `kept` raises a refusal only at its first renewal, and a later fai
 is logged as a warning and retried at the next `every`;
 `publish` says nothing of whether the wake arrived.
 `received()` survives every connection failure and ends only on cancellation or a refusal;
-a payload that is no valid UTF-8 is skipped and logged by length.
+a payload that is no valid UTF-8 or no frame is skipped and logged by length.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event, its fields in `extra=`, and logline's `StepTimer`
@@ -195,8 +196,19 @@ dependency floors run the same tests.
   cannot interleave with another. Redis does not roll a script back: a script that fails after a write keeps
   the write, so a script checks before it writes.
 - A deadline key is a ZSET member and a HASH field, never a key segment, so a free-form key cannot reach a
-  fixed key. The segment after `v1` is one of the fixed tokens `wake`, `epoch`, `d`, `l` and `lock`, and a caller's
-  `kind` appears only after `d:` and before a fixed suffix.
+  fixed key. The segment after `v1` is one of the fixed tokens `epoch`, `d`, `l` and `lock`, the wake channel
+  is `<prefix>:tandem:v2:wake`, and a caller's `kind` appears only after `d:` and before a fixed suffix.
+- The wake payload is one frame: the decimal byte length of the traceparent, a colon, the traceparent's bytes
+  and the address's bytes, with no end marker. A length cannot be confused by the address, which is everything
+  after the traceparent, so any address survives byte for byte, `12:orders` and a colon included; a length of
+  0 is a wake with no trace. `WakeChannel.publish` frames the caller's `current_traceparent()` and the Lua
+  `tandem.wake` frames its optional third argument, so both write the same bytes. `received()` reads a
+  length of 1 to 9 digits that fits the payload and whose two parts are UTF-8; anything else is skipped as
+  `malformed_frame`. The traceparent reaches the host as received and is validated by logline's `unit_trace`,
+  not by tandem. `received()` sets no trace itself: a context set across its `yield` would leak into the
+  host's loop, so the host wraps its handling in `unit_trace`.
+- The channel's version segment is a contract between pods of different releases: v1 and v2 pods do not
+  hear each other, so a host restarts all its pods at once when it crosses the change.
 - The generation of a lease is 128 random bits from `secrets`, compared by equality, not ordered: it needs
   no counter that a Redis restart would reset. Its collision bound is accepted. The epoch is created by
   `SET NX` inside every lease script, so UNKNOWN ends at most `lasts` after the first lease command after a

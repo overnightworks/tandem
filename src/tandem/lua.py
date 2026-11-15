@@ -70,9 +70,11 @@ function tandem.lock_state(keys, name, lasts_ms)
   return {'unknown'}
 end
 
--- Publishes `address` on the wake channel `channel` (`wake_channel(key_prefix)`); returns the
--- number of subscribers it reached.
-function tandem.wake(channel, address)
-  return redis.call('PUBLISH', channel, address)
+-- Publishes `address` on the wake channel `channel` (`wake_channel(key_prefix)`) in the frame
+-- `<byte length of traceparent>:<traceparent><address>`; `traceparent` is optional, and an absent
+-- one sends no trace. Returns the number of subscribers it reached.
+function tandem.wake(channel, address, traceparent)
+  traceparent = traceparent or ''
+  return redis.call('PUBLISH', channel, #traceparent .. ':' .. traceparent .. address)
 end
 """

@@ -38,6 +38,31 @@ async def test_a_script_writes_a_deadline_and_a_wake_that_are_visible_together(
         assert state[0] == "waiting"
 
 
+@pytest.mark.parametrize(
+    "traceparent", [None, "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"]
+)
+@pytest.mark.parametrize("address", ["orders/7", "12:orders", "caf\u00e9"])
+async def test_a_script_wakes_with_the_trace_it_is_given_or_none(
+    traceparent: str | None,
+    address: str,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+):
+    client = make_client(redis_url)
+    script = Script(client, "return tandem.wake(ARGV[1], ARGV[2], ARGV[3])")
+    arguments: list[str | int | bytes] = [wake_channel(key_prefix), address]
+    if traceparent is not None:
+        arguments.append(traceparent)
+    async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+
+        reached = await script.run([], arguments)
+
+        assert reached == 1
+        assert await reader.next_wake() == Wake(address, traceparent)
+
+
 async def test_a_script_that_fails_before_its_first_write_leaves_neither_deadline_nor_wake(
     redis_url: str,
     make_client: Callable[..., Redis],

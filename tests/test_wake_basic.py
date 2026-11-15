@@ -3,6 +3,7 @@ from collections.abc import AsyncGenerator, Callable
 from typing import cast
 
 import pytest
+from logline import unit_trace
 from redis.asyncio import Redis
 
 from tandem import Resubscribed, StoreError, Wake, WakeChannel, checked_segment
@@ -30,7 +31,7 @@ async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend
     try:
         async with Reader(channel) as reader:
             first = await reader.next()
-            subscribers = await observer.pubsub_numsub(f"{key_prefix}:tandem:v1:wake")
+            subscribers = await observer.pubsub_numsub(wake_channel(key_prefix))
             wakes = [await reader.next_wake() for _ in range(3)]
     finally:
         stop.set()
@@ -51,6 +52,76 @@ async def test_a_wake_published_through_one_client_arrives_through_another(
         await reader.next_resubscribed()
         await publisher.publish("orders/7")
         assert await reader.next_wake() == Wake("orders/7")
+
+
+_TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+_INCOMING_TRACEPARENT = f"00-{_TRACE_ID}-b7ad6b7169203331-01"
+_ADDRESSES = ["orders/7", "", "12:orders", ":", "0:", "5:abc", "caf\u00e9/7", "a\nb", "a\x00b", "-"]
+
+
+@pytest.mark.parametrize("address", _ADDRESSES)
+async def test_a_wake_arrives_with_its_address_byte_for_byte_and_no_trace_when_the_sender_has_none(
+    address: str, redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+
+        await publisher.publish(address)
+
+        assert await reader.next_wake() == Wake(address, None)
+
+
+@pytest.mark.parametrize("address", _ADDRESSES)
+@pytest.mark.parametrize("decode_responses", [False, True])
+async def test_a_wake_arrives_with_its_address_and_the_trace_of_its_sender(
+    address: str,
+    decode_responses: bool,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+):
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    subscriber = make_client(redis_url, decode_responses=decode_responses)
+    async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+
+        with unit_trace(_INCOMING_TRACEPARENT):
+            await publisher.publish(address)
+
+        wake = await reader.next_wake()
+    assert wake.address == address
+    assert wake.traceparent is not None
+    assert wake.traceparent.split("-")[1] == _TRACE_ID
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [b"orders/7", b"", b":orders", b"x:orders", b"-1:a", b"5:abc", b"1234567890:a", b"1:\xc3\xa9"],
+)
+@pytest.mark.parametrize("decode_responses", [False, True])
+async def test_a_payload_that_is_no_frame_is_skipped_and_the_next_wake_still_arrives(
+    payload: bytes,
+    decode_responses: bool,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    publisher = make_client(redis_url)
+    subscriber = make_client(redis_url, decode_responses=decode_responses)
+    async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+        await publisher.publish(wake_channel(key_prefix), payload)
+        await WakeChannel(publisher, key_prefix=key_prefix).publish("orders/7")
+        wake = await reader.next_wake()
+        assert reader.drain() == []
+
+    assert wake.address == "orders/7"
+    (skipped,) = log_lines.of("wake_payload.skipped", "tandem.wake")
+    assert skipped["level"] == "warning"
+    assert skipped["reason"] == "malformed_frame"
+    assert skipped["payload_bytes"] == len(payload)
 
 
 async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
@@ -131,7 +202,7 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
     log_lines: LogLines,
 ):
     malformed_text = "malformed-wake"
-    malformed = malformed_text.encode() + b"\xff"
+    malformed = b"0:" + malformed_text.encode() + b"\xff"
     publisher = make_client(redis_url)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
