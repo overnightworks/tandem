@@ -37,37 +37,18 @@ class _GatedLeases(Leases):
         return await super().renew(holder)
 
 
-class _FailingRenewals(Leases):
-    """Leases whose renewals after the first fail as an outage, each noted at its loop time."""
-
-    def __init__(self, *args: Any, **keywords: Any) -> None:
-        super().__init__(*args, **keywords)
-        self.failed_at: list[float] = []
-        self._calls = 0
-
-    async def renew(self, holder: str) -> Renewal:
-        self._calls += 1
-        if self._calls == 1:
-            return await super().renew(holder)
-        self.failed_at.append(asyncio.get_running_loop().time())
-        raise StoreError("the renewal failed", outage=True)
-
-
 class _GatedEnd(Leases):
-    """Leases whose `end` waits at a gate the test opens, then ends or, when told, fails."""
+    """Leases whose `end` waits at a gate the test opens."""
 
     def __init__(self, *args: Any, **keywords: Any) -> None:
         super().__init__(*args, **keywords)
         self.ending = asyncio.Event()
         self.gate = asyncio.Event()
         self.ended = False
-        self.fails = False
 
     async def end(self, holder: str, generation: str) -> bool:
         self.ending.set()
         await self.gate.wait()
-        if self.fails:
-            raise StoreError("the end failed")
         ended = await super().end(holder, generation)
         self.ended = True
         return ended
@@ -138,24 +119,20 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
 
 
 async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_the_first_back_off(
-    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+    proxy: TcpProxy, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
     every = timedelta(seconds=BACKOFF_FIRST_SECONDS * 1.6)
-    leases = _FailingRenewals(
-        make_client(redis_url),
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=2 * every,
-        claim_for=timedelta(seconds=30),
-    )
-
-    async def failed_twice() -> bool:
-        return len(leases.failed_at) >= 2
+    leases = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=2 * every)
+    clock = asyncio.get_running_loop()
 
     async with leases.kept("pod-a", every=every):
-        await until(failed_twice)
+        proxy.cut()
+        await proxy.attempts_reached(1)
+        first = clock.time()
+        await proxy.attempts_reached(2)
+        second = clock.time()
+        proxy.restore()
 
-    first, second = leases.failed_at[:2]
     assert second - first >= every.total_seconds() * 0.9
 
 
@@ -217,19 +194,19 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
 @pytest.mark.parametrize("end_fails", [False, True])
 async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_propagates(
     end_fails: bool,
-    redis_url: str,
+    url_denying: Callable[[str], Awaitable[str]],
+    observer: Redis,
     make_client: Callable[..., Redis],
     key_prefix: str,
     caplog: pytest.LogCaptureFixture,
 ):
     leases = _GatedEnd(
-        make_client(redis_url),
+        make_client(await url_denying("flushall")),
         key_prefix=key_prefix,
         family="owner",
         lasts=LASTS,
         claim_for=timedelta(seconds=30),
     )
-    leases.fails = end_fails
 
     inside = asyncio.Event()
 
@@ -243,6 +220,8 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     task.cancel()
     await within(leases.ending.wait())
     task.cancel()
+    if end_fails:
+        await observer.acl_setuser(key_prefix, commands=["-evalsha"])
     with caplog.at_level(logging.ERROR, logger="tandem.leases"):
         leases.gate.set()
         await asyncio.gather(task, return_exceptions=True)
