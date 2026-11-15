@@ -18,8 +18,9 @@ flowchart LR
 ```
 
 Outside: the host, which owns its state, its Redis client (pool, retry, timeouts) and what an address means,
-and Redis, which keeps no wake. tandem imports only `redis` and `logline`; an import contract keeps test tools out of it. logline is the
-fleet's logger, a second runtime dependency: a version range by name in tandem, whose tag the host pins.
+and Redis, which keeps no wake. tandem imports only `redis` and `logline`; an import contract keeps test
+tools out of it. logline is the fleet's logger, a second runtime dependency: a version range by name in
+tandem, whose tag the host pins.
 
 ## 2. Building Block View
 
@@ -29,10 +30,10 @@ Module owners in `tandem`:
   each `received()`, the translation of Redis's messages into events and the back-off loop around them.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
-- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end, state, live
-  and sweep scripts and the loops of `kept` and `serve_lapses`. Its log lines are described under Crosscutting Concepts. Its lapse queue is a `DeadlineQueue` of
-  `deadlines` (the transitions of `Deadlines` over any three keys), so a lapse is claimed, extended and
-  finished by the same scripts as a deadline.
+- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end,
+  state, live and sweep scripts and the loops of `kept` and `serve_lapses`. Its log lines are described under
+  Crosscutting Concepts. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of `Deadlines`
+  over any three keys), so a lapse is claimed, extended and finished by the same scripts as a deadline.
 - `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations,
   which it generates in Python. It shares the app's epoch and `Liveness` with `leases`, and has no lapse
   queue.
@@ -48,9 +49,10 @@ Module owners in `tandem`:
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
   reader that steps through events, and a minimal host.
 
-`wake` and `script` use `client` and `errors` (`wake`, `leases` and `locks` also use `logline`); `deadlines` uses `script` and `keys`; `leases` uses `deadlines`, `script`,
-`keys` and `errors`; `locks` uses `deadlines` (its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`. Anything
-that is the name of a Redis key or channel is built in `keys`.
+`wake` and `script` use `client` and `errors` (`wake`, `leases` and `locks` also use `logline`); `deadlines`
+uses `script` and `keys`; `leases` uses `deadlines`, `script`, `keys` and `errors`; `locks` uses `deadlines`
+(its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`. Anything that is the name
+of a Redis key or channel is built in `keys`.
 
 ## 3. Runtime View
 
