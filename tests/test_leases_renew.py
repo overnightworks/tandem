@@ -7,7 +7,7 @@ from redis.asyncio import Redis
 from tandem import Leases, Liveness, Renewal
 from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms, until_redis_ms
-from tests.support.leases import Handled, serving, until_gone
+from tests.support.leases import Handled, liveness_of, serving, until_gone
 from tests.support.waiting import until
 
 LASTS = timedelta(milliseconds=300)
@@ -36,15 +36,15 @@ async def test_a_renewal_of_a_live_lease_keeps_its_generation_and_reads_alive(
 
     assert first.started is True
     assert second == Renewal(started=False, generation=first.generation)
-    assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+    assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
 
 
-async def test_liveness_of_no_holder_is_empty_without_a_round_trip(
+async def test_the_state_of_no_holder_is_empty_without_a_round_trip(
     make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
     nowhere = make_client("redis://127.0.0.1:1")
 
-    assert await new_leases(nowhere).liveness([]) == {}
+    assert await new_leases(nowhere).state([]) == {}
 
 
 async def test_a_lapse_that_serve_lapses_claimed_reads_gone_and_a_renewal_starts_a_new_generation(
@@ -57,9 +57,9 @@ async def test_a_lapse_that_serve_lapses_claimed_reads_gone_and_a_renewal_starts
 
     async with serving(leases, handled):
         (lapse,) = await handled.received()
-        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.GONE}
+        assert await liveness_of(leases, "pod-a") is Liveness.GONE
         renewal = await leases.renew("pod-a")
-        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+        assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
         handled.release()
 
     assert lapse.generation == old.generation
@@ -81,7 +81,7 @@ async def test_ending_the_current_generation_removes_the_lease_and_a_stale_one_c
     assert second.started is True
     assert await leases.end("pod-a", first.generation) is False
 
-    assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+    assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
     assert await leases.renew("pod-a") == Renewal(started=False, generation=second.generation)
     async with serving(leases, handled):
         (lapse,) = await handled.received()
@@ -97,7 +97,7 @@ async def test_an_expired_lease_reaches_a_handler_once_and_a_renewal_after_it_st
     await until_redis_ms(client, await redis_ms(client) + 300)
 
     async def lapsed() -> bool:
-        return (await leases.liveness(["pod-a"]))["pod-a"] is Liveness.GONE
+        return await liveness_of(leases, "pod-a") is Liveness.GONE
 
     await until(lapsed)
     renewal = await leases.renew("pod-a")

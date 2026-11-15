@@ -12,7 +12,7 @@ from redis.backoff import NoBackoff
 from tandem import Leases, Liveness, Renewal, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tests.support.deadlines import redis_ms, until_redis_ms
-from tests.support.leases import until_gone
+from tests.support.leases import liveness_of, until_gone
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import until, within
 
@@ -85,7 +85,7 @@ async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
     leases = new_leases(make_client(redis_url), lasts=LASTS)
 
     async with leases.kept("pod-a", every=EVERY) as hold:
-        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+        assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
         assert await leases.renew("pod-a") == Renewal(started=False, generation=hold.generation)
 
     await until_gone(leases, "pod-a")
@@ -100,7 +100,7 @@ async def test_kept_renews_while_its_body_runs(
     async with leases.kept("pod-a", every=EVERY):
         two_lasts_ms = 2 * LASTS // timedelta(milliseconds=1)
         await until_redis_ms(client, await redis_ms(client) + two_lasts_ms)
-        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+        assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
 
 
 async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
@@ -130,7 +130,7 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
     observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
 
     async def alive() -> bool:
-        return (await observer_pod.liveness(["pod-a"]))["pod-a"] is Liveness.ALIVE
+        return await liveness_of(observer_pod, "pod-a") is Liveness.ALIVE
 
     with caplog.at_level(logging.WARNING, logger="tandem.leases"):
         async with holder_pod.kept("pod-a", every=EVERY):
@@ -175,7 +175,7 @@ async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
         proxy.cut()
 
         async def lapsed() -> bool:
-            return (await observer_pod.liveness(["pod-a"]))["pod-a"] is Liveness.GONE
+            return await liveness_of(observer_pod, "pod-a") is Liveness.GONE
 
         await until(lapsed)
         proxy.restore()
@@ -213,7 +213,7 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
 
     await until_gone(leases, "pod-a")
     await until_redis_ms(client, await redis_ms(client) + 3 * 100)
-    assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.GONE}
+    assert await liveness_of(leases, "pod-a") is Liveness.GONE
 
 
 @pytest.mark.parametrize("end_fails", [False, True])

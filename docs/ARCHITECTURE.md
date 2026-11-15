@@ -28,7 +28,7 @@ Module owners in `tandem`:
   each `received()`, the translation of Redis's messages into events and the back-off loop around them.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
-- `leases` owns `Leases`, `Liveness`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end, liveness, live
+- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end, state, live
   and sweep scripts and the loops of `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of
   `deadlines` (the transitions of `Deadlines` over any three keys), so a lapse is claimed, extended and
   finished by the same scripts as a deadline.
@@ -109,8 +109,9 @@ stateDiagram-v2
     Lapse --> [*]: done
 ```
 
-`liveness` reads the expiry ZSET alone: a lapse in any state is GONE (or UNKNOWN until `lasts` have passed since
-the epoch, which the first lease command after a Redis restart creates).
+`state` reads the expiry ZSET and, for a live lease, its generation, and writes only the epoch: a lapse in
+any state is GONE (or UNKNOWN until `lasts` have passed since the epoch, which the first lease command after
+a Redis restart creates).
 
 A lock is one ZSET member scored by its expiry and one HASH field holding its generation. Every lock
 script starts with `tandem.lock_state`, which reads `TIME`, sets the epoch when absent and reads the lock,

@@ -3,10 +3,10 @@ from datetime import timedelta
 
 from redis.asyncio import Redis
 
-from tandem import Leases, Liveness, Roster
+from tandem import Leases, LeaseState, Liveness, Roster
 from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms
-from tests.support.leases import Handled, serving, wipe
+from tests.support.leases import Handled, liveness_of, serving, wipe
 from tests.support.restart import restart
 from tests.support.waiting import until
 
@@ -37,17 +37,17 @@ async def test_after_a_redis_restart_an_absent_lease_reads_unknown_for_lasts_the
 
     await restart(client)
     read_at = await redis_ms(client)
-    first_read = await leases.liveness(["pod-a"])
+    first_read = await leases.state(["pod-a"])
 
     async def settled() -> bool:
-        return (await leases.liveness(["pod-a"]))["pod-a"] is Liveness.GONE
+        return await liveness_of(leases, "pod-a") is Liveness.GONE
 
-    assert first_read == {"pod-a": Liveness.UNKNOWN}
+    assert first_read == {"pod-a": LeaseState(Liveness.UNKNOWN, None, None)}
     await until(settled)
     assert await redis_ms(client) >= read_at + LASTS_MS
 
 
-async def test_only_liveness_reads_after_a_wipe_read_unknown_until_lasts_passed_since_the_first(
+async def test_only_state_reads_after_a_wipe_read_unknown_until_lasts_passed_since_the_first(
     redis_url: str,
     make_client: Callable[..., Redis],
     observer: Redis,
@@ -59,17 +59,20 @@ async def test_only_liveness_reads_after_a_wipe_read_unknown_until_lasts_passed_
     await wipe(observer, key_prefix, "owner")
 
     read_at = await redis_ms(client)
-    first_read = await leases.liveness(["pod-a", "pod-b"])
+    first_read = await leases.state(["pod-a", "pod-b"])
 
     async def settled() -> bool:
-        return (await leases.liveness(["pod-a"]))["pod-a"] is Liveness.GONE
+        return await liveness_of(leases, "pod-a") is Liveness.GONE
 
-    assert first_read == {"pod-a": Liveness.UNKNOWN, "pod-b": Liveness.UNKNOWN}
+    assert first_read == {
+        "pod-a": LeaseState(Liveness.UNKNOWN, None, None),
+        "pod-b": LeaseState(Liveness.UNKNOWN, None, None),
+    }
     await until(settled)
     assert await redis_ms(client) >= read_at + LASTS_MS
 
 
-async def test_liveness_renew_and_the_sweep_each_create_the_epoch_in_their_own_script(
+async def test_state_renew_and_the_sweep_each_create_the_epoch_in_their_own_script(
     redis_url: str,
     make_client: Callable[..., Redis],
     observer: Redis,
@@ -83,7 +86,7 @@ async def test_liveness_renew_and_the_sweep_each_create_the_epoch_in_their_own_s
         return bool(await observer.exists(epoch))
 
     await wipe(observer, key_prefix, "owner")
-    await leases.liveness(["pod-a"])
+    await leases.state(["pod-a"])
     assert await has_epoch()
 
     await wipe(observer, key_prefix, "owner")

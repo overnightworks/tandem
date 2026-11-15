@@ -14,7 +14,14 @@ from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
 from tests.support.deadlines import redis_ms, until_redis_ms
-from tests.support.leases import SERVING_EVERY, Handled, ended, serving, until_gone
+from tests.support.leases import (
+    SERVING_EVERY,
+    Handled,
+    ended,
+    liveness_of,
+    serving,
+    until_gone,
+)
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import until, within
 
@@ -50,7 +57,7 @@ async def test_the_lapse_of_a_killed_pod_reaches_one_handler_and_another_if_that
     try:
         assert await _process_line(holder) == "RENEWED"
         holder.send_signal(signal.SIGKILL)
-        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+        assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
 
         claimer = await _start_process("serve", redis_url, key_prefix, "300")
         assert await _process_line(claimer) == "HANDLING pod-a"
