@@ -214,8 +214,9 @@ carries on; either way the next event is a `Resubscribed`, before any wake it co
 refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends `received()` with
 `StoreError`. A payload that is no valid UTF-8, or no frame of tandem's, is skipped with a
 `wake_payload.skipped` warning that names its length, never its content; the next valid wake arrives as before. A client that decodes responses
-(`decode_responses=True`) fails inside redis-py on such a payload, so tandem subscribes again and a
-`Resubscribed` precedes that wake.
+(`decode_responses=True`) fails inside redis-py on a payload that is no valid UTF-8, so tandem subscribes
+again and a `Resubscribed` precedes the next wake; a readable payload that is no frame is skipped on the
+existing subscription, without a `Resubscribed`.
 
 The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`, disjoint
 from the channel and from every other kind. `claim_for` is the same for every pod of one kind. A claim whose
