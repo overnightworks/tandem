@@ -19,6 +19,14 @@ from tandem.script import Script
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+
+def _split_due_key(due: Due) -> tuple[str, str]:
+    """The generation and the holder of a lapse's due key; a generation is never logged."""
+    # Split at the first ':' only: a generation holds none, a holder may.
+    generation, _, holder = due.key.partition(":")
+    return generation, holder
+
+
 _TOKEN_BYTES = 16  # 128 random bits per generation
 _BATCH = 8  # lapses claimed at once, so a claim does not run out while its batch waits
 _CLAIM_EXTENSIONS_PER_CLAIM = 3
@@ -211,6 +219,7 @@ class Leases:
         self._redis = redis
         self._lasts = checked_span(lasts, argument="lasts")
         self._claim_for = checked_span(claim_for, argument="claim_for")
+        self._family = family
         self._keys = lease_keys(key_prefix, family)
         self._lasts_ms = milliseconds(lasts)
         self._lapses = DeadlineQueue(redis, self._keys.lapse, claim_for)
@@ -358,8 +367,7 @@ class Leases:
     async def _handle_one(
         self, handle: Callable[[Lapse], Awaitable[None]], due: Due, pending: set[Due]
     ) -> None:
-        # Split at the first ':' only: a generation holds none, a holder may.
-        generation, _, holder = due.key.partition(":")
+        generation, holder = _split_due_key(due)
         lapse = Lapse(holder=holder, generation=generation, due=due)
         try:
             await handle(lapse)
@@ -382,7 +390,10 @@ class Leases:
                     pending.discard(due)
                     continue
                 if not kept:
-                    logger.warning("the claim of the lapse of %s ran out", due.key)
+                    _, holder = _split_due_key(due)
+                    logger.warning(
+                        "the claim of the lapse of %s in family %s ran out", holder, self._family
+                    )
                     pending.discard(due)
 
     def _lease_state(self, reply: list[object]) -> LeaseState:

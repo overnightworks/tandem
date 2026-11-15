@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import signal
 import sys
 from collections.abc import Awaitable, Callable
@@ -242,6 +243,36 @@ async def test_a_claim_that_runs_out_leaves_the_handler_running(
         running.release()
         await until_redis_ms(client, await redis_ms(client) + 300)
         assert not task.done()
+
+
+async def test_a_claim_that_runs_out_is_logged_with_holder_and_family_and_never_the_generation(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+    caplog: pytest.LogCaptureFixture,
+):
+    client = make_client(redis_url)
+    leases = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+    generation = (await leases.state(["pod-a"]))["pod-a"].generation
+    assert generation is not None
+    running = Handled(hold=True)
+
+    async def ran_out() -> bool:
+        return "ran out" in caplog.text
+
+    with caplog.at_level(logging.WARNING, logger="tandem"):
+        async with serving(leases, running):
+            await running.received()
+            await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+            await until(ran_out)
+            running.release()
+
+    assert "pod-a" in caplog.text
+    assert "owner" in caplog.text
+    assert generation not in caplog.text
 
 
 async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_running(
