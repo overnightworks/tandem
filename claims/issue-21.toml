@@ -1,0 +1,8 @@
+claim_id = "b708226e656b4771842cb601779d516f"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "b334b9075deeaa99cf6814d44c228a6388c0b442"
+branch = "claude/issue-21-wake-v2-trace"
+scope = ["README.md", "docs", "src", "tests"]
+opened_commit = "0edac3e5443559fb9be33c2e60229cad7e68bca3"
+whole_reason = "One channel version raise whose keys, payload, receiver and docs change together."
