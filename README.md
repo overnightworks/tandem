@@ -60,8 +60,9 @@ async def save(served: Served, address: str, value: str) -> None:
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
 | `StoreError` | Redis refused or timed out; the cause is chained. |
 
-The channel is `<key_prefix>:tandem:v1:wake`: one channel per app, so every pod of an app uses the same
-`key_prefix`.
+The channel is `<key_prefix>:tandem:v1:wake`: one channel per key prefix, so every pod that follows the
+same channel uses the same `key_prefix`. An app may run several `WakeChannel`s on one Redis under distinct
+prefixes, for example `skat` and `skat-agents`.
 
 `received()` hides no reconnect. When the connection breaks, redis-py reconnects inside the retry budget of
 the host's client, or tandem backs off (0.5 s doubling to 5 s, with no attempt limit), subscribes again and
