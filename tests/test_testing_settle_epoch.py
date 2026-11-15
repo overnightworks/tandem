@@ -1,4 +1,5 @@
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Literal
 
 import pytest
@@ -11,6 +12,7 @@ from tests.support.leases import wipe as wipe_leases
 from tests.support.locks import wipe as wipe_locks
 
 
+@pytest.mark.parametrize("lasts", [timedelta(seconds=30), timedelta(days=36500), timedelta.max])
 @pytest.mark.parametrize("settled", [False, True])
 @pytest.mark.parametrize("family", ["leases", "locks"])
 async def test_an_absent_holder_reads_gone_at_once_only_after_settle_epoch(
@@ -22,10 +24,11 @@ async def test_an_absent_holder_reads_gone_at_once_only_after_settle_epoch(
     key_prefix: str,
     family: Literal["leases", "locks"],
     settled: bool,
+    lasts: timedelta,
 ):
     client = make_client(redis_url)
-    leases = new_leases(client)
-    locks = new_locks(client)
+    leases = new_leases(client, lasts=lasts)
+    locks = new_locks(client, lasts=lasts)
     await wipe_leases(observer, key_prefix, "owner")
     await wipe_locks(observer, key_prefix)
     if settled:
