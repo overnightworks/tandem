@@ -11,6 +11,7 @@ from tests.support.leases import Handled, serving, until_gone
 from tests.support.waiting import until
 
 LASTS = timedelta(milliseconds=300)
+ENDING_LASTS = timedelta(seconds=2)
 
 
 async def test_concurrent_renewals_of_one_absent_holder_start_exactly_one_lease(
@@ -70,7 +71,7 @@ async def test_a_lapse_that_serve_lapses_claimed_reads_gone_and_a_renewal_starts
 async def test_ending_the_current_generation_removes_the_lease_and_a_stale_one_changes_nothing(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
-    leases = new_leases(make_client(redis_url), lasts=LASTS)
+    leases = new_leases(make_client(redis_url), lasts=ENDING_LASTS)
     first = await leases.renew("pod-a")
     handled = Handled()
 

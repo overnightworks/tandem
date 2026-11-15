@@ -72,7 +72,8 @@ async def test_kept_renews_while_its_body_runs(
     leases = new_leases(client, lasts=LASTS)
 
     async with leases.kept("pod-a", every=EVERY):
-        await until_redis_ms(client, await redis_ms(client) + 2 * 600)
+        two_lasts_ms = 2 * LASTS // timedelta(milliseconds=1)
+        await until_redis_ms(client, await redis_ms(client) + two_lasts_ms)
         assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
 
 
