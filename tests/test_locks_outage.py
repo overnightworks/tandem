@@ -46,8 +46,8 @@ async def test_an_acquire_whose_reply_is_lost_is_replayed_to_the_same_generation
     new_locks: Callable[..., Locks],
 ):
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
-    await retrying.ping()
     proxy_pod = new_locks(retrying)
+    assert await proxy_pod.acquire("warm-up") is not None  # loads the script, so a lost reply is a run's
     proxy.drop_replies_of_open_connections()
 
     generation = await proxy_pod.acquire("gpu-0")
@@ -66,10 +66,11 @@ async def test_a_release_whose_reply_is_lost_is_replayed_to_false_and_the_lock_i
     generation = await direct.acquire("gpu-0")
     assert generation is not None
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
-    await retrying.ping()
+    proxy_pod = new_locks(retrying)
+    assert await proxy_pod.release("warm-up", "a-generation") is False  # loads the script
     proxy.drop_replies_of_open_connections()
 
-    released = await new_locks(retrying).release("gpu-0", generation)
+    released = await proxy_pod.release("gpu-0", generation)
 
     assert released is False
     assert (await direct.state("gpu-0")).liveness is Liveness.GONE
