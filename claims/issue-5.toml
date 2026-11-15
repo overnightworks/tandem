@@ -1,7 +1,0 @@
-claim_id = "3ffca596bd2943ca9c45b51e1b3f6ba9"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "a1209c759a257ac080e150bb9f6b0228e4f5a75d"
-branch = "claude/issue-5-the-fleet-standard-cross-pod-coordinatio"
-scope = ["README.md"]
-opened_commit = "ff18b842f206512533f152d0b923c6ae0954ea66"
