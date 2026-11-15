@@ -25,17 +25,20 @@ def test_a_kind_or_prefix_that_is_no_segment_fails_at_construction_naming_the_ar
     backend: Backend, argument: str, value: str
 ):
     arguments = {"key_prefix": "skat", "kind": "work", argument: value}
+    client = backend.new_client()
 
     with pytest.raises(ValueError, match=argument):
-        Deadlines(backend.new_client(), claim_for=timedelta(seconds=1), **arguments)
+        Deadlines(client, claim_for=timedelta(seconds=1), **arguments)
 
 
 @pytest.mark.parametrize("claim_for", [timedelta(0), timedelta(seconds=-1)])
 def test_a_claim_that_lasts_no_time_fails_at_construction_naming_the_argument(
     backend: Backend, claim_for: timedelta
 ):
+    client = backend.new_client()
+
     with pytest.raises(ValueError, match="claim_for"):
-        Deadlines(backend.new_client(), key_prefix="skat", kind="work", claim_for=claim_for)
+        Deadlines(client, key_prefix="skat", kind="work", claim_for=claim_for)
 
 
 async def test_kinds_named_like_the_fixed_tokens_share_a_prefix_with_a_wake_channel_without_a_clash(
