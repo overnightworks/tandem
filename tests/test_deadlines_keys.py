@@ -39,7 +39,7 @@ def test_a_claim_that_is_no_positive_timedelta_fails_at_construction_naming_the_
     client = backend.new_client()
 
     with pytest.raises(ValueError, match="claim_for"):
-        Deadlines(client, key_prefix="skat", kind="work", claim_for=claim_for)
+        Deadlines(client, key_prefix="skat", kind="work", claim_for=claim_for)  # pyright: ignore[reportArgumentType] - the case passes the wrong type on purpose
 
 
 async def test_kinds_named_like_the_fixed_tokens_share_a_prefix_with_a_wake_channel_without_a_clash(
