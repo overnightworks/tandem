@@ -77,7 +77,10 @@ prefixes, for example `skat` and `skat-agents`.
 the host's client, or tandem backs off (0.5 s doubling to 5 s, with no attempt limit), subscribes again and
 carries on; either way the next event is a `Resubscribed`, before any wake it covers. Only a command Redis
 refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends `received()` with
-`StoreError`.
+`StoreError`. A payload that is no valid UTF-8 is skipped with a warning on the `tandem.wake` logger that
+names its length, never its content; the next valid wake arrives as before. A client that decodes responses
+(`decode_responses=True`) fails inside redis-py on such a payload, so tandem subscribes again and a
+`Resubscribed` precedes that wake.
 
 ## The host's duties
 

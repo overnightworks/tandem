@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import re
 from collections.abc import AsyncGenerator, Callable
 from typing import cast
 
@@ -6,6 +8,7 @@ import pytest
 from redis.asyncio import Redis
 
 from tandem import Resubscribed, StoreError, Wake, WakeChannel, checked_segment
+from tandem.keys import wake_channel
 from tests.support.backends import Backend
 from tests.support.reader import Reader
 from tests.support.waiting import until, within
@@ -118,3 +121,33 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         assert [await within(pending), await within(anext(events))] == [Wake("a"), Wake("b")]
     finally:
         await events.aclose()
+
+
+@pytest.mark.parametrize("decode_responses", [False, True])
+async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arrives(
+    decode_responses: bool,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    key_prefix: str,
+    caplog: pytest.LogCaptureFixture,
+):
+    publisher = make_client(redis_url)
+    subscriber = make_client(redis_url, decode_responses=decode_responses)
+    async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
+        await reader.next_resubscribed()
+        with caplog.at_level(logging.WARNING, logger="tandem.wake"):
+            await publisher.publish(wake_channel(key_prefix), b"\xff")
+            if decode_responses:
+                # redis-py fails inside get_message on a decode error: tandem subscribes again.
+                await reader.next_resubscribed()
+            await WakeChannel(publisher, key_prefix=key_prefix).publish("orders/7")
+            wake = await reader.next_wake()
+        assert reader.running
+
+    assert wake == Wake("orders/7")
+    (warning,) = [
+        record
+        for record in caplog.records
+        if record.name == "tandem.wake" and record.levelno == logging.WARNING
+    ]
+    assert re.search(r"\b1\b", warning.getMessage())

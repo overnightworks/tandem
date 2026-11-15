@@ -71,7 +71,8 @@ pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an
 surfaces as `StoreError`.
 
 **Failure.** `publish` reports every failure as `StoreError` and says nothing of whether the wake arrived.
-`received()` survives every connection failure and ends only on cancellation or a refusal.
+`received()` survives every connection failure and ends only on cancellation or a refusal;
+a payload that is no valid UTF-8 is skipped and logged by length.
 
 **Proof strategy.** The tests run every cell against a real Redis in a throwaway container started by
 `scripts/run_redis_tests.sh`; the cells that need an outage go through a small TCP proxy, and the cells of

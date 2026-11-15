@@ -1,6 +1,7 @@
 """WakeChannel: tell the pods of one app that something changed, and when to re-read everything."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from redis.asyncio.connection import AbstractConnection
 
 from tandem.errors import StoreError
 from tandem.keys import wake_channel
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 BACKOFF_FIRST_SECONDS = 0.5
 BACKOFF_CAP_SECONDS = 5.0
@@ -68,20 +71,25 @@ class WakeChannel:
         await connection.read_response()
 
     async def received(self) -> AsyncIterator[Wake | Resubscribed]:
-        """Yield every confirmation of the subscription and every wake after it, until cancelled."""
+        """Yield every confirmation of the subscription and every wake after it, until cancelled.
+
+        A payload that is no valid UTF-8 is logged and skipped.
+        """
         backoff = BACKOFF_FIRST_SECONDS
         while True:
             pubsub = self._redis.pubsub(ignore_subscribe_messages=False)
             try:
                 await pubsub.subscribe(self._channel)
                 while True:
-                    message = await pubsub.get_message(timeout=None)
-                    if message is None:  # the reply to redis-py's health check is no event
-                        continue
-                    event = self._event(message)
+                    event = await self._next_event(pubsub)
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                     yield event
+            except UnicodeDecodeError as error:
+                # A client that decodes responses fails inside get_message, which leaves the
+                # connection unusable: the subscription is established again, with a Resubscribed.
+                self._log_skipped_payload(error)
+                continue
             except (redis_errors.AuthenticationError, redis_errors.AuthorizationError) as error:
                 raise StoreError(f"subscribe to {self._channel} refused: {error}") from error
             except redis_errors.ConnectionError, redis_errors.TimeoutError:
@@ -93,6 +101,16 @@ class WakeChannel:
             await self._wait(backoff)
             backoff = min(backoff * 2, BACKOFF_CAP_SECONDS)
 
+    async def _next_event(self, pubsub: PubSub) -> Wake | Resubscribed:
+        while True:
+            message = await pubsub.get_message(timeout=None)
+            if message is None:  # the reply to redis-py's health check is no event
+                continue
+            try:
+                return self._event(message)
+            except UnicodeDecodeError as error:
+                self._log_skipped_payload(error)
+
     async def _wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
 
@@ -102,6 +120,10 @@ class WakeChannel:
             with suppress(redis_errors.RedisError):
                 await pubsub.unsubscribe(self._channel)
         await pubsub.aclose()
+
+    def _log_skipped_payload(self, error: UnicodeDecodeError) -> None:
+        # One payload no pod of this app published must not end the subscription for good.
+        logger.warning("skipped a wake payload of %d bytes, no valid UTF-8", len(error.object))
 
     def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
         if message["type"] == "subscribe":
