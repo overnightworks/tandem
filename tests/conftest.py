@@ -10,9 +10,11 @@ from fakeredis import FakeAsyncRedis, FakeServer
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 
-from tandem import Client, Deadlines, Leases
+from tandem import Client, Deadlines, Leases, Locks
+from tandem.keys import lock_keys
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
+from tests.support.locks import FAMILY
 from tests.support.proxy import TcpProxy
 
 
@@ -60,6 +62,24 @@ def new_leases(key_prefix: str) -> Callable[..., Leases]:
         return Leases(
             client, key_prefix=key_prefix, family=family, lasts=lasts, claim_for=claim_for
         )
+
+    return build
+
+
+@pytest.fixture
+async def settled_epoch(observer: Redis, key_prefix: str) -> None:
+    """The app's epoch set far in the past, so a lock reads free at once until a test wipes it."""
+    await observer.set(lock_keys(key_prefix, FAMILY).epoch, 0)
+
+
+@pytest.fixture
+def new_locks(key_prefix: str, settled_epoch: None) -> Callable[..., Locks]:
+    """Locks of one family under the test's prefix; every call with the same family shares them."""
+
+    def build(
+        client: Client, *, family: str = FAMILY, lasts: timedelta = timedelta(seconds=30)
+    ) -> Locks:
+        return Locks(client, key_prefix=key_prefix, family=family, lasts=lasts)
 
     return build
 
