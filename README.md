@@ -97,6 +97,19 @@ close that gap:
 3. **A pod turns Ready at its first `Resubscribed`.** Before it, the pod is deaf to wakes and a state it
    served earlier may be stale.
 
+## Fleet standard: cross-pod coordination in Redis
+
+Covers what pods share through Redis: waking one another across pods, deadlines kept in Redis and leases
+kept in Redis. It excludes deadlines and holds an app keeps in its own database under its own
+transaction, such as skat's chair holds.
+
+New code coordinates through tandem at once; an existing copy moves to tandem when its app touches it
+anyway. Today tandem ships the wake channel; deadlines and leases join with their releases.
+
+A deviation is a request naming its enduring harm. tandem's head reviews it, only the operator rules it,
+and the ruling is recorded in this section; the process is marketplace's
+[How a standard works](https://github.com/overnightworks/marketplace/blob/main/docs/standards.md#how-a-standard-works).
+
 ## Limits
 
 - A subscription that dies without closing, such as a half-open TCP connection, is noticed only when the
