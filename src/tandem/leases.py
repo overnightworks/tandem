@@ -491,32 +491,41 @@ class Leases:
         while True:
             await asyncio.sleep(claim_seconds / _CLAIM_EXTENSIONS_PER_CLAIM)
             for due in tuple(pending):
-                fields = self._lease_fields(_lapse_of(due).holder)
-                if due in unextended:
-                    kept = time.monotonic() < runs_out_at[due]
-                else:
-                    try:
-                        kept = await self._lapses.extend(due)
-                    except StoreError as error:
-                        logger.warning(
-                            "lapse_claim_extension.failed",
-                            extra={
-                                "reason": failure_reason(error),
-                                "error_type": type(error).__name__,
-                                **fields,
-                            },
-                        )
-                        if error.outage:
-                            # Redis may have applied the extension before its reply was lost, so
-                            # the claim's end is unknown: stop watching rather than call it expired.
-                            pending.discard(due)
-                        else:
-                            unextended.add(due)
-                        continue
-                    runs_out_at[due] = time.monotonic() + claim_seconds
-                if not kept:
-                    logger.warning("lapse_claim.expired", extra=fields)
+                await self._extend_claim(due, pending, unextended, runs_out_at)
+
+    async def _extend_claim(
+        self,
+        due: Due,
+        pending: set[Due],
+        unextended: set[Due],
+        runs_out_at: dict[Due, float],
+    ) -> None:
+        fields = self._lease_fields(_lapse_of(due).holder)
+        if due in unextended:
+            kept = time.monotonic() < runs_out_at[due]
+        else:
+            try:
+                kept = await self._lapses.extend(due)
+            except StoreError as error:
+                logger.warning(
+                    "lapse_claim_extension.failed",
+                    extra={
+                        "reason": failure_reason(error),
+                        "error_type": type(error).__name__,
+                        **fields,
+                    },
+                )
+                if error.outage:
+                    # Redis may have applied the extension before its reply was lost, so
+                    # the claim's end is unknown: stop watching rather than call it expired.
                     pending.discard(due)
+                else:
+                    unextended.add(due)
+                return
+            runs_out_at[due] = time.monotonic() + self._claim_for.total_seconds()
+        if not kept:
+            logger.warning("lapse_claim.expired", extra=fields)
+            pending.discard(due)
 
     def _lease_fields(self, holder: str) -> dict[str, str]:
         return {"lease_family": self._family, "holder_id": holder}
