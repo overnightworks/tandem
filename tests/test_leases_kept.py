@@ -215,7 +215,7 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
 
 
 @pytest.mark.parametrize("end_fails", [False, True])
-async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_propagates(
+async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_propagates(
     end_fails: bool,
     redis_url: str,
     make_client: Callable[..., Redis],
@@ -249,8 +249,8 @@ async def test_cancelling_the_exit_still_ends_the_lease_before_the_cancellation_
 
     assert task.cancelled()
     assert leases.ended is not end_fails
-    logged = [record for record in caplog.records if record.name == "tandem.leases"]
-    assert bool(logged) is end_fails
+    logged = [record.name for record in caplog.records if record.levelno >= logging.ERROR]
+    assert logged == (["tandem.leases"] if end_fails else [])
 
 
 async def test_cancelling_the_exit_and_its_cleanup_together_ends_the_task_cancelled_unlogged(
