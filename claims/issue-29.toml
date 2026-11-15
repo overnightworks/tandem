@@ -3,5 +3,6 @@ agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
 role = "builder"
 base = "c5e25ad29fe644633ef38ebbabbfcb58500cbbf1"
 branch = "claude/issue-29-logline-0-4"
-scope = ["pyproject.toml", "src/tandem/__init__.py", "uv.lock"]
+scope = [".github/workflows/ci.yml", "README.md", "pyproject.toml", "src/tandem/__init__.py", "src/tandem/leases.py", "uv.lock"]
 opened_commit = "d251a9e0b8819f458da5a8916b8be28ed4d923f8"
+whole_reason = "One dependency range widening, with the CI floor, the README range and the typing fix it forces."
