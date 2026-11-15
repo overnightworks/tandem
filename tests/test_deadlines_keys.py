@@ -34,7 +34,7 @@ def test_a_kind_or_prefix_that_is_no_segment_fails_at_construction_naming_the_ar
 
 @pytest.mark.parametrize("claim_for", [timedelta(0), timedelta(seconds=-1), 5])
 def test_a_claim_that_is_no_positive_timedelta_fails_at_construction_naming_the_argument(
-    backend: Backend, claim_for: timedelta
+    backend: Backend, claim_for: timedelta | int
 ):
     client = backend.new_client()
 
