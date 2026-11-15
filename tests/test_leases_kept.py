@@ -1,0 +1,125 @@
+import asyncio
+from collections.abc import Callable
+from datetime import timedelta
+from typing import Any
+
+import pytest
+from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
+
+from tandem import Leases, Liveness, Renewal, StoreError
+from tests.support.deadlines import redis_ms, until_redis_ms
+from tests.support.leases import until_gone
+from tests.support.proxy import TcpProxy
+from tests.support.waiting import until, within
+
+LASTS = timedelta(milliseconds=600)
+EVERY = timedelta(milliseconds=100)
+
+
+class _GatedLeases(Leases):
+    """Leases whose renewals after the first wait at a gate the test opens."""
+
+    def __init__(self, *args: Any, **keywords: Any) -> None:
+        super().__init__(*args, **keywords)
+        self.entered = asyncio.Event()
+        self.gate = asyncio.Event()
+        self._calls = 0
+
+    async def renew(self, holder: str) -> Renewal:
+        self._calls += 1
+        if self._calls > 1:
+            self.entered.set()
+            await self.gate.wait()
+        return await super().renew(holder)
+
+
+async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
+    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+):
+    leases = new_leases(make_client(redis_url), lasts=LASTS)
+
+    async with leases.kept("pod-a", every=EVERY) as hold:
+        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+        assert await leases.renew("pod-a") == Renewal(started=False, generation=hold.generation)
+
+    await until_gone(leases, "pod-a")
+
+
+async def test_kept_renews_while_its_body_runs(
+    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+):
+    client = make_client(redis_url)
+    leases = new_leases(client, lasts=LASTS)
+
+    async with leases.kept("pod-a", every=EVERY):
+        await until_redis_ms(client, await redis_ms(client) + 2 * 600)
+        assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.ALIVE}
+
+
+async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
+    url_with_wrong_password: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+):
+    leases = new_leases(make_client(url_with_wrong_password), lasts=LASTS)
+
+    with pytest.raises(StoreError):
+        async with leases.kept("pod-a", every=EVERY):
+            pytest.fail("the body must not run")
+
+
+async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
+    proxy: TcpProxy,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+):
+    paused_pod = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS)
+    observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
+
+    async with paused_pod.kept("pod-a", every=EVERY) as hold:
+        first = hold.generation
+        proxy.cut()
+
+        async def lapsed() -> bool:
+            return (await observer_pod.liveness(["pod-a"]))["pod-a"] is Liveness.GONE
+
+        await until(lapsed)
+        proxy.restore()
+
+        async def restarted() -> bool:
+            return hold.generation != first
+
+        await until(restarted)
+        assert await observer_pod.renew("pod-a") == Renewal(
+            started=False, generation=hold.generation
+        )
+
+
+async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_good(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    client = make_client(redis_url)
+    leases = _GatedLeases(
+        client,
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+    )
+
+    async def body() -> None:
+        async with leases.kept("pod-a", every=EVERY):
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(body())
+    await within(leases.entered.wait())
+    task.cancel()
+    leases.gate.set()
+    await asyncio.gather(task, return_exceptions=True)
+
+    await until_gone(leases, "pod-a")
+    await until_redis_ms(client, await redis_ms(client) + 3 * 100)
+    assert await leases.liveness(["pod-a"]) == {"pod-a": Liveness.GONE}

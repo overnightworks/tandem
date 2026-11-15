@@ -3,7 +3,7 @@
 ## 1. Context and Scope
 
 tandem runs inside each pod of a host app, with no server or storage of its own; its one neighbour is the
-Redis the host already uses, whose clock (`TIME`) stamps every deadline. Host developers start at the [README](../README.md).
+Redis the host already uses, whose clock (`TIME`) stamps every deadline and lease. Host developers start at the [README](../README.md).
 
 ```mermaid
 flowchart LR
@@ -28,17 +28,23 @@ Module owners in `tandem`:
   each `received()`, the translation of Redis's messages into events and the back-off loop around them.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
+- `leases` owns `Leases`, `Liveness`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end, liveness, live
+  and sweep scripts and the loops of `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of
+  `deadlines` (the transitions of `Deadlines` over any three keys), so a lapse is claimed, extended and
+  finished by the same scripts as a deadline.
 - `lua` owns `LUA_KIT`: the one implementation of each transition that both `Deadlines` and a host's script
   run (`now_ms`, `deadline_set`, `deadline_cancel`, `deadline_state`, `wake`).
 - `script` owns `Script`: it prepends `LUA_KIT`, runs by SHA and reloads on `NOSCRIPT`.
 - `client` owns the exported `Client` type.
 - `keys` owns the names tandem gives in Redis: the check of a key prefix and a kind, the wake channel and the
-  `DeadlineKeys` of a kind.
-- `errors` owns `StoreError` and the one mapping of a Redis failure onto it.
+  `DeadlineKeys` of a kind and the `LeaseKeys` of a family.
+- `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage
+  (a lost connection or a timeout) or a refusal, and the back-off both loops use.
 - `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
   reader that steps through events, and a minimal host.
 
-`wake` and `script` use `client` and `errors`; `deadlines` uses `script` and `keys`; `script` uses `lua`. Anything
+`wake` and `script` use `client` and `errors`; `deadlines` uses `script` and `keys`; `leases` uses `deadlines`, `script`,
+`keys` and `errors`; `script` uses `lua`. Anything
 that is the name of a Redis key or channel is built in `keys`.
 
 ## 3. Runtime View
@@ -86,6 +92,22 @@ by the claim's expiry and a HASH from key to the current token. Because the HASH
 claim is valid exactly while its token is the current one, so `set`, `cancel` and a takeover void the old
 claim by replacing or deleting that token, in the same script that moves the key.
 
+A lease is in the expiry ZSET while it lives; its generation is in a HASH. Every lease script starts by
+reading `TIME`, setting the epoch when absent and reading the lease state, so these are one snapshot:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Live: renew, no live lease (new generation)
+    Live --> Live: renew (same generation)
+    Live --> Lapse: end, current generation
+    Live --> Lapse: expiry passed, swept by serve_lapses or by the next renew
+    Lapse --> Lapse: claimed by serve_lapses (claim_due, extend)
+    Lapse --> [*]: done
+```
+
+`liveness` reads the expiry ZSET alone: a lapse in any state is GONE (or UNKNOWN until `lasts` have passed since
+the epoch, which the first lease command after a Redis restart creates).
+
 ## 4. Deployment View
 
 A library in the host's environment. The host installs it by a pinned git tag and builds a `WakeChannel` on
@@ -98,7 +120,9 @@ publish and subscribe. The channel carries addresses, never contents: whoever ca
 pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an out-of-memory refusal)
 surfaces as `StoreError`.
 
-**Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines` and `Script`, is a `StoreError`;
+**Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines`, `Leases` and `Script`, is a `StoreError`
+that says whether it was an outage or a refusal; `received()`, `serve_lapses` and `kept` ride out an outage
+and end, or raise, on a refusal;
 `publish` says nothing of whether the wake arrived.
 `received()` survives every connection failure and ends only on cancellation or a refusal;
 a payload that is no valid UTF-8 is skipped and logged by length.
@@ -136,6 +160,14 @@ dependency floors run the same tests.
 - A deadline key is a ZSET member and a HASH field, never a key segment, so a free-form key cannot reach a
   fixed key. The segment after `v1` is one of the fixed tokens `wake`, `epoch`, `d` and `l`, and a caller's
   `kind` appears only after `d:` and before a fixed suffix.
+- The generation of a lease is 128 random bits from `secrets`, compared by equality, not ordered: it needs
+  no counter that a Redis restart would reset. Its collision bound is accepted. The epoch is created by
+  `SET NX` inside every lease script, so UNKNOWN ends at most `lasts` after the first lease command after a
+  restart, with no separate initialisation and no race between pods.
+- A lapse leaves the expiry ZSET for the lapse queue in the script that notices it (a renew, an end or the
+  sweep), so a claim on a lapse never touches the expiry that decides ALIVE.
+- `serve_lapses` claims small batches and extends every pending claim of the batch, so the claims of a mass
+  lapse do not run out while earlier handlers run.
 - Tokens are 128 random bits from `secrets`, generated in Python and passed as arguments, since Lua's random
   is not fit for them. Each claim gets a fresh one.
 - Scripts run through the host's client, so its `Retry` can run one again after a lost reply. A replay is
@@ -157,7 +189,10 @@ dependency floors run the same tests.
 
 ## 8. Risks and Technical Debt
 
-- A Redis restart takes every deadline and claim with it; the host's reconcile pass sets them again.
+- A Redis restart takes every deadline, lease, lapse and claim with it; the host's reconcile pass sets them
+  again, and an absent lease reads UNKNOWN for `lasts`.
+- A family without `serve_lapses` keeps its lapse queue until the next restart; a lapse whose handler always
+  raises returns every `claim_for`.
 - Redis pub/sub is at most once: a wake published while a pod's subscription is down is lost, and only the
   host's re-read at `Resubscribed` and its handling of a failed `publish` bring the pods back in line.
 - `received()` blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies

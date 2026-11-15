@@ -1,10 +1,11 @@
 """The delays tandem waits between its attempts, recorded instead of waited."""
 
 import asyncio
+from typing import Any
 
 from redis.asyncio import Redis
 
-from tandem import WakeChannel
+from tandem import Leases, WakeChannel
 from tests.support.waiting import BOUND_SECONDS
 
 
@@ -39,4 +40,15 @@ class BackoffRecordingChannel(WakeChannel):
         self._backoffs = backoffs
 
     async def _wait(self, seconds: float) -> None:
+        await self._backoffs.record(seconds)
+
+
+class BackoffRecordingLeases(Leases):
+    """`Leases` whose waits after an outage go to `backoffs`."""
+
+    def __init__(self, *args: Any, backoffs: Backoffs, **keywords: Any) -> None:
+        super().__init__(*args, **keywords)
+        self._backoffs = backoffs
+
+    async def _back_off(self, seconds: float) -> None:
         await self._backoffs.record(seconds)
