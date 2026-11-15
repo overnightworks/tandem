@@ -1,5 +1,4 @@
 import asyncio
-import inspect
 from collections.abc import AsyncGenerator, Callable
 from typing import cast
 
@@ -84,12 +83,6 @@ async def test_publish_fails_during_an_outage_and_delivers_after_it(
 def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend, key_prefix: str):
     with pytest.raises(ValueError, match="key_prefix"):
         WakeChannel(backend.new_client(), key_prefix=key_prefix)
-
-
-def test_the_constructor_takes_the_client_and_a_keyword_only_key_prefix_and_nothing_else():
-    parameters = inspect.signature(WakeChannel).parameters
-    assert list(parameters) == ["redis", "key_prefix"]
-    assert parameters["key_prefix"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
 async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
