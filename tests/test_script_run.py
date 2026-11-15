@@ -61,12 +61,13 @@ async def test_a_script_that_fails_before_its_first_write_leaves_neither_deadlin
 
 
 async def test_a_script_runs_again_after_the_servers_script_cache_is_flushed(
-    redis_url: str, make_client: Callable[..., Redis], observer: Redis
+    restartable_redis_url: str, make_client: Callable[..., Redis]
 ):
-    script = Script(make_client(redis_url), "return 7")
+    client = make_client(restartable_redis_url)
+    script = Script(client, "return 7")
     assert await script.run([], []) == 7
 
-    await observer.script_flush()
+    await client.script_flush()
 
     assert await script.run([], []) == 7
 

@@ -169,8 +169,8 @@ def held_backoffs() -> Backoffs:
 def restartable_redis_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     """The URL of the server a test may shut down or flush; Docker's restart policy brings it back.
 
-    One test at a time holds the server, across xdist workers, because a shutdown or a script flush is
-    state every other user of it would observe.
+    One test at a time holds the server, across xdist workers, because a shutdown or a script flush
+    is state every other user of it would observe.
     """
     url = _required_url("TANDEM_TEST_RESTARTABLE_REDIS_URL")
     lock_path = tmp_path_factory.getbasetemp().parent / "restartable-redis.lock"
