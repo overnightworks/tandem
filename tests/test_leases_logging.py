@@ -28,16 +28,21 @@ async def test_every_lease_call_the_host_awaits_writes_one_line_with_its_outcome
     log_lines: LogLines,
 ):
     call = _LEASE_CALLS[event]
+    refused = new_leases(make_client(await url_denying("evalsha")))
 
     await call(new_leases(make_client(redis_url)))
     with pytest.raises(StoreError):
-        await call(new_leases(make_client(await url_denying("evalsha"))))
+        await call(refused)
 
     done, failed = log_lines.of(event, "tandem.leases")
-    assert (done["level"], done["outcome"], done["lease_family"]) == ("info", Outcome.OK, "owner")
-    assert (failed["level"], failed["outcome"]) == ("error", Outcome.FAILED)
+    assert done["level"] == "info"
+    assert done["outcome"] == Outcome.OK
+    assert done["lease_family"] == "owner"
+    assert failed["level"] == "error"
+    assert failed["outcome"] == Outcome.FAILED
     assert failed["error_type"] == StoreError.__name__
-    assert done["duration_ms"] >= 0 and failed["duration_ms"] >= 0
+    assert done["duration_ms"] >= 0
+    assert failed["duration_ms"] >= 0
 
 
 @pytest.mark.parametrize(("level", "lines"), [(logging.INFO, 1), (logging.WARNING, 0)])

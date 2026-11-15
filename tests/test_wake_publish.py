@@ -137,8 +137,12 @@ async def test_a_publish_writes_one_line_in_the_hosts_trace_whether_it_succeeds_
             await refused.publish("orders/7")
 
     done, failed = log_lines.of("wake_publication.ended", "tandem.wake")
-    assert (done["level"], done["outcome"]) == ("info", Outcome.OK)
-    assert (failed["level"], failed["outcome"]) == ("error", Outcome.FAILED)
+    assert done["level"] == "info"
+    assert done["outcome"] == Outcome.OK
+    assert failed["level"] == "error"
+    assert failed["outcome"] == Outcome.FAILED
     assert failed["error_type"] == StoreError.__name__
-    assert done["duration_ms"] >= 0 and failed["duration_ms"] >= 0
-    assert done["trace_id"] == failed["trace_id"] == traceparent.split("-")[1]
+    assert done["duration_ms"] >= 0
+    assert failed["duration_ms"] >= 0
+    assert done["trace_id"] == traceparent.split("-")[1]
+    assert failed["trace_id"] == traceparent.split("-")[1]
