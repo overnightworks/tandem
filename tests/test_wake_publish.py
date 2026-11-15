@@ -146,3 +146,4 @@ async def test_a_publish_writes_one_line_in_the_hosts_trace_whether_it_succeeds_
     assert failed["duration_ms"] >= 0
     assert done["trace_id"] == traceparent.split("-")[1]
     assert failed["trace_id"] == traceparent.split("-")[1]
+    log_lines.assert_none_holds("orders/7")

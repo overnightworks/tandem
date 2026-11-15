@@ -130,11 +130,13 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
     key_prefix: str,
     log_lines: LogLines,
 ):
+    malformed_text = "malformed-wake"
+    malformed = malformed_text.encode() + b"\xff"
     publisher = make_client(redis_url)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
         await reader.next_resubscribed()
-        await publisher.publish(wake_channel(key_prefix), b"\xff")
+        await publisher.publish(wake_channel(key_prefix), malformed)
         if decode_responses:
             # redis-py fails inside get_message on a decode error: tandem subscribes again.
             await reader.next_resubscribed()
@@ -144,8 +146,8 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
 
     assert wake == Wake("orders/7")
     (skipped,) = log_lines.of("wake_payload.skipped", "tandem.wake")
-    assert (skipped["level"], skipped["reason"], skipped["payload_bytes"]) == (
-        "warning",
-        "invalid_utf8",
-        1,
-    )
+    assert skipped["level"] == "warning"
+    assert skipped["reason"] == "invalid_utf8"
+    assert skipped["payload_bytes"] == len(malformed)
+    log_lines.assert_none_holds(malformed_text)
+    log_lines.assert_none_holds("orders/7")
