@@ -14,7 +14,7 @@ from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
 from tests.support.deadlines import redis_ms, until_redis_ms
-from tests.support.leases import SERVING_EVERY, Handled, ended, serving
+from tests.support.leases import SERVING_EVERY, Handled, ended, serving, until_gone
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import until, within
 
@@ -168,6 +168,32 @@ async def test_every_lapse_of_a_mass_lapse_reaches_a_handler(
         await handled.received(lapses)
 
     assert sorted(lapse.holder for lapse in handled.lapses) == sorted(holders)
+
+
+async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handled_once(
+    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+):
+    client = make_client(redis_url)
+    first = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
+    second = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    holders = ["pod-a", "pod-b", "pod-c"]
+    for holder in holders:
+        await first.renew(holder)
+    for holder in holders:
+        await until_gone(first, holder)
+    running, other = Handled(hold=True), Handled()
+
+    async with serving(first, running):
+        await running.received()
+        async with serving(second, other, claimer="the other"):
+            await until_redis_ms(client, await redis_ms(client) + 3 * 300)
+            assert other.lapses == []
+            running.release()
+            await running.received(3)
+            await until_redis_ms(client, await redis_ms(client) + 3 * 300)
+
+    assert sorted(lapse.holder for lapse in running.lapses) == holders
+    assert other.lapses == []
 
 
 async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_lapse_is_handled_after_it(
