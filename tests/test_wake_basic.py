@@ -81,8 +81,9 @@ async def test_publish_fails_during_an_outage_and_delivers_after_it(
 
 @pytest.mark.parametrize("key_prefix", ["a:b", "", "Upper", "-lead", "a b", "a\n"])
 def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend, key_prefix: str):
+    client = backend.new_client()
     with pytest.raises(ValueError, match="key_prefix"):
-        WakeChannel(backend.new_client(), key_prefix=key_prefix)
+        WakeChannel(client, key_prefix=key_prefix)
 
 
 async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
