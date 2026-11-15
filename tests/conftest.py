@@ -1,5 +1,7 @@
 import fcntl
+import io
 import os
+import sys
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from datetime import timedelta
@@ -7,6 +9,7 @@ from typing import Any
 
 import pytest
 from fakeredis import FakeAsyncRedis, FakeServer
+from logline.testing import configured
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 
@@ -15,6 +18,7 @@ from tandem.keys import lock_keys
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.locks import FAMILY
+from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 
 
@@ -34,6 +38,16 @@ def redis_url() -> str:
 def key_prefix() -> str:
     """A prefix of its own, so tests share one server without sharing keys or channels."""
     return f"t-{uuid.uuid4().hex[:12]}"
+
+
+@pytest.fixture
+def log_lines(monkeypatch: pytest.MonkeyPatch) -> Iterator[LogLines]:
+    """The host's logging as the fleet runs it: logline's JSON lines at the debug level."""
+    stdout = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", stdout)
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    with configured("tandem-tests"):
+        yield LogLines(stdout)
 
 
 @pytest.fixture

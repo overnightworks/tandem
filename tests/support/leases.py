@@ -2,7 +2,7 @@
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import timedelta
 
 from redis.asyncio import Redis
@@ -40,9 +40,9 @@ class Handled:
 
 @contextlib.asynccontextmanager
 async def serving(
-    leases: Leases, handle: Handled, *, claimer: str = "the test"
+    leases: Leases, handle: Callable[[Lapse], Awaitable[None]], *, claimer: str = "the test"
 ) -> AsyncIterator[asyncio.Task[None]]:
-    """Run `serve_lapses` as a task for the body of the block."""
+    """Run `serve_lapses` with `handle` as a task for the body of the block."""
     task = asyncio.create_task(leases.serve_lapses(handle, claimer=claimer, every=SERVING_EVERY))
     try:
         yield task

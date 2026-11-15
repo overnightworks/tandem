@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
@@ -13,6 +12,7 @@ from tandem import Leases, Liveness, Renewal, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import liveness_of, until_gone
+from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import until, within
 
@@ -29,12 +29,12 @@ class _GatedLeases(Leases):
         self.gate = asyncio.Event()
         self._calls = 0
 
-    async def renew(self, holder: str) -> Renewal:
+    async def _renew_untimed(self, holder: str) -> Renewal:
         self._calls += 1
         if self._calls > 1:
             self.entered.set()
             await self.gate.wait()
-        return await super().renew(holder)
+        return await super()._renew_untimed(holder)
 
 
 class _GatedEnd(Leases):
@@ -46,10 +46,10 @@ class _GatedEnd(Leases):
         self.gate = asyncio.Event()
         self.ended = False
 
-    async def end(self, holder: str, generation: str) -> bool:
+    async def _end_untimed(self, holder: str, generation: str) -> bool:
         self.ending.set()
         await self.gate.wait()
-        ended = await super().end(holder, generation)
+        ended = await super()._end_untimed(holder, generation)
         self.ended = True
         return ended
 
@@ -124,7 +124,7 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
     key_prefix: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
-    caplog: pytest.LogCaptureFixture,
+    log_lines: LogLines,
 ):
     holder_pod = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
     observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
@@ -132,15 +132,45 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
     async def alive() -> bool:
         return await liveness_of(observer_pod, "pod-a") is Liveness.ALIVE
 
-    with caplog.at_level(logging.WARNING, logger="tandem.leases"):
-        async with holder_pod.kept("pod-a", every=EVERY):
-            await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
-            await until_gone(observer_pod, "pod-a")
-            await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
-            await until(alive)
+    async with holder_pod.kept("pod-a", every=EVERY):
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+        await until_gone(observer_pod, "pod-a")
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
+        await until(alive)
 
-    levels = {record.levelno for record in caplog.records if record.name == "tandem.leases"}
-    assert levels == {logging.ERROR}
+    failures = log_lines.of("lease_renewal.failed", "tandem.leases")
+    assert failures
+    assert {(line["level"], line["reason"]) for line in failures} == {("warning", "refused")}
+    assert {line["error_type"] for line in failures} == {StoreError.__name__}
+    assert {(line["lease_family"], line["holder_id"]) for line in failures} == {("owner", "pod-a")}
+
+
+async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_traceback(
+    proxy: TcpProxy,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    leases = new_leases(
+        make_client(proxy.url, retry=Retry(NoBackoff(), 0)),
+        lasts=LASTS,
+    )
+
+    async with leases.kept("pod-a", every=EVERY) as hold:
+        proxy.cut()
+
+        async def failure_logged() -> bool:
+            return bool(log_lines.of("lease_renewal.failed", "tandem.leases"))
+
+        await until(failure_logged)
+        proxy.restore()
+        generation = hold.generation
+
+    (first, *_) = log_lines.of("lease_renewal.failed", "tandem.leases")
+    assert (first["level"], first["reason"]) == ("warning", "outage")
+    assert first["error_type"] == StoreError.__name__
+    assert "exception" not in first
+    log_lines.assert_none_holds(generation)
 
 
 async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_the_first_back_off(
@@ -223,7 +253,7 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     observer: Redis,
     make_client: Callable[..., Redis],
     key_prefix: str,
-    caplog: pytest.LogCaptureFixture,
+    log_lines: LogLines,
 ):
     leases, task = await _exiting_at_its_gate(
         make_client(await url_denying("flushall")), key_prefix
@@ -231,28 +261,36 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     task.cancel()
     if end_fails:
         await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
-    with caplog.at_level(logging.ERROR, logger="tandem.leases"):
-        leases.gate.set()
-        await asyncio.gather(task, return_exceptions=True)
+    leases.gate.set()
+    await asyncio.gather(task, return_exceptions=True)
 
     assert task.cancelled()
     assert leases.ended is not end_fails
-    logged = [record.name for record in caplog.records if record.levelno >= logging.ERROR]
-    assert logged == (["tandem.leases"] if end_fails else [])
+    failures = log_lines.of("lease_end.failed", "tandem.leases")
+    assert len(failures) == (1 if end_fails else 0)
+    for failure in failures:
+        assert failure["level"] == "error"
+        assert failure["error_type"] == StoreError.__name__
+        assert (failure["lease_family"], failure["holder_id"]) == ("owner", "pod-a")
+    errors = [line for line in log_lines.of_logger("tandem.leases") if line["level"] == "error"]
+    assert errors == failures
 
 
 async def test_cancelling_the_exit_and_its_cleanup_together_ends_the_task_cancelled_unlogged(
     redis_url: str,
     make_client: Callable[..., Redis],
     key_prefix: str,
-    caplog: pytest.LogCaptureFixture,
+    log_lines: LogLines,
 ):
     earlier = asyncio.all_tasks()
     _, task = await _exiting_at_its_gate(make_client(redis_url), key_prefix)
-    with caplog.at_level(logging.DEBUG, logger="tandem.leases"):
-        for started_since in asyncio.all_tasks() - earlier:
-            started_since.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    for started_since in asyncio.all_tasks() - earlier:
+        started_since.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
     assert task.cancelled()
-    assert not [record for record in caplog.records if record.name == "tandem.leases"]
+    assert not [
+        line
+        for line in log_lines.of_logger("tandem.leases")
+        if line["level"] in ("warning", "error")
+    ]

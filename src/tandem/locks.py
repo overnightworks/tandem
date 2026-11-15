@@ -1,15 +1,20 @@
 """Locks: a hold on a name that one generation owns, started only when none is held."""
 
+import logging
 import secrets
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import cast
+
+from logline import StepTimer
 
 from tandem.client import Client
 from tandem.deadlines import checked_span, milliseconds
 from tandem.keys import LockKeys, lock_keys
 from tandem.leases import Liveness
 from tandem.script import Script
+
+logger: logging.Logger = logging.getLogger(__name__)
 
 _TOKEN_BYTES = 16  # 128 random bits per generation
 _EXPIRED_BATCH = 10  # expired entries removed by each acquire, so abandoned names leave in time
@@ -103,6 +108,7 @@ class Locks:
         is a positive `timedelta`.
         """
         self._redis = redis
+        self._family = family
         self._lasts = checked_span(lasts, argument="lasts")
         self._keys = lock_keys(key_prefix, family)
         self._lasts_ms = milliseconds(lasts)
@@ -129,14 +135,16 @@ class Locks:
         script with the same generation, which then returns it.
         """
         generation = secrets.token_hex(_TOKEN_BYTES)
-        reply = await self._acquire.run(
-            self._key_names(), self._arguments(name, generation, _EXPIRED_BATCH)
-        )
+        async with self._step("lock_acquisition.ended"):
+            reply = await self._acquire.run(
+                self._key_names(), self._arguments(name, generation, _EXPIRED_BATCH)
+            )
         return None if reply is None else self._text(reply)
 
     async def extend(self, name: str, generation: str) -> bool:
         """Keep the live lock of `generation` for another `lasts`; else change nothing."""
-        reply = await self._extend.run(self._key_names(), self._arguments(name, generation))
+        async with self._step("lock_extension.ended"):
+            reply = await self._extend.run(self._key_names(), self._arguments(name, generation))
         return reply == 1
 
     async def release(self, name: str, generation: str) -> bool:
@@ -144,12 +152,14 @@ class Locks:
 
         A reply lost under the client's `Retry` replays a release that succeeded as False.
         """
-        reply = await self._release.run(self._key_names(), self._arguments(name, generation))
+        async with self._step("lock_release.ended"):
+            reply = await self._release.run(self._key_names(), self._arguments(name, generation))
         return reply == 1
 
     async def state(self, name: str) -> LockState:
         """Whether `name` is held (ALIVE), free (GONE), or unsettled after a restart (UNKNOWN)."""
-        reply = await self._state.run(self._key_names(), self._arguments(name))
+        async with self._step("lock_state_read.ended"):
+            reply = await self._state.run(self._key_names(), self._arguments(name))
         if reply is None:
             return LockState(Liveness.GONE, None, None)
         _, *held = cast(list[object], reply)
@@ -159,6 +169,9 @@ class Locks:
         return LockState(
             Liveness.ALIVE, self._text(generation), timedelta(milliseconds=cast(int, remaining_ms))
         )
+
+    def _step(self, event: str) -> StepTimer:
+        return StepTimer(event, logger, lock_family=self._family)
 
     def _key_names(self) -> list[str]:
         return [self._keys.epoch, self._keys.expiry, self._keys.generation]
