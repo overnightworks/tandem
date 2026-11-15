@@ -120,9 +120,9 @@ async def train_on_gpu(job: Job) -> None:
         return  # held by someone else, or Redis restarted less than `lasts` ago
     try:
         while not job.done():
-            await job.step()
+            await job.step(fence=generation)  # the job's writes carry the generation, so a stale one is refused
             if not await locks.extend("gpu-0", generation):
-                return  # the lock is lost; whatever the job wrote is fenced by the generation
+                return  # the lock is lost; a later step would be refused by its fence
     finally:
         await locks.release("gpu-0", generation)
 ```
