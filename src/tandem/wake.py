@@ -33,7 +33,7 @@ class WakeChannel:
         self._channel = wake_channel(key_prefix)
 
     async def publish(self, address: str) -> None:
-        """Send one PUBLISH. A failure means the delivery is uncertain; nothing is retried."""
+        """Send one PUBLISH. A failure means the delivery is uncertain; the PUBLISH is never resent."""
         # The client's own execute_command would run the PUBLISH under the client's Retry, which can
         # send it again after a lost reply; the connection is driven directly instead.
         redis = self._redis

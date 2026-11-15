@@ -53,7 +53,7 @@ async def save(served: Served, address: str, value: str) -> None:
 | Name | What it is |
 |---|---|
 | `WakeChannel(redis, *, key_prefix)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. |
-| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer. tandem never retries or queues it, and the client's own `Retry` does not apply to it. |
+| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with a refused connection `publish` can block for the `Retry`'s total before it raises. |
 | `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
 | `Wake(address)` | A pod published `address`. |
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |

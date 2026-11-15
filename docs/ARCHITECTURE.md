@@ -89,7 +89,9 @@ dependency floors run the same tests.
   `Retry`.
 - `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
   wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
-  borrows a connection from the host's pool and sends the one command itself.
+  borrows a connection from the host's pool and sends the one command itself. The host client's `Retry` still
+  governs the connecting and health check before the command, because the pool's connections carry it and
+  tandem does not change them; no `PUBLISH` has been sent at that point, so it cannot duplicate a wake.
 - The prefix is one segment checked at construction: a prefix with `:` would make the segments of a channel name
   ambiguous, and a wrong value must fail where it is written.
 - On cancellation `received()` unsubscribes and closes its connection, so a cancelled reader leaves no
