@@ -1,8 +1,0 @@
-claim_id = "553c73dd0210487ab240db22b9c90432"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "c3db43ca664d556d126ea6559283763f73f07833"
-branch = "claude/issue-7-tandem-0-2-0-p2-deadlines-on-redis-time"
-scope = ["README.md", "docs", "pyproject.toml", "src", "tests"]
-opened_commit = "99740ef7366e951bb9ddcc0e17a2d6b085302ef6"
-whole_reason = "One public primitive with its Lua kit and runner; the runner and kit share one error owner and one key record, so they do not split."
