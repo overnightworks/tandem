@@ -53,23 +53,17 @@ async def test_reading_the_state_of_an_absent_holder_creates_no_lease(
     assert await observer.hlen(keys.generation) == 0
 
 
-async def test_an_ended_holder_reads_gone_without_generation_or_remaining(
-    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+@pytest.mark.parametrize("ended_first", [True, False], ids=["ended", "expired"])
+async def test_an_ended_or_expired_holder_reads_gone_without_generation_or_remaining(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    ended_first: bool,
 ):
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     renewal = await leases.renew("pod-a")
-
-    assert await leases.end("pod-a", renewal.generation) is True
-    await until_gone(leases, "pod-a")
-
-    assert (await leases.state(["pod-a"]))["pod-a"] == LeaseState(Liveness.GONE, None, None)
-
-
-async def test_an_expired_holder_reads_gone_without_generation_or_remaining(
-    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
-):
-    leases = new_leases(make_client(redis_url), lasts=LASTS)
-    await leases.renew("pod-a")
+    if ended_first:
+        assert await leases.end("pod-a", renewal.generation) is True
 
     await until_gone(leases, "pod-a")
 
