@@ -106,8 +106,8 @@ transaction, such as skat's chair holds.
 New code coordinates through tandem at once; an existing copy moves to tandem when its app touches it
 anyway. Today tandem ships the wake channel; deadlines and leases join with their releases.
 
-A deviation is a request naming its enduring harm. Tandem's head reviews it, only the operator rules it,
-and the ruling is recorded in this section. How a standard works:
+A deviation is a request naming its enduring harm. tandem's head reviews it, only the operator rules it,
+and the ruling is recorded in this section; the process is marketplace's
 [How a standard works](https://github.com/overnightworks/marketplace/blob/main/docs/standards.md#how-a-standard-works).
 
 ## Limits
