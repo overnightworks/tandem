@@ -5,6 +5,7 @@ from datetime import timedelta
 from redis.asyncio import Redis
 
 from tandem import Liveness, Locks, LockState
+from tandem.deadlines import milliseconds
 from tandem.keys import lock_keys
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.locks import FAMILY, expiry_of, wipe
@@ -71,7 +72,7 @@ async def test_extending_after_the_expiry_returns_false_and_a_later_acquire_gets
     locks = new_locks(client, lasts=LASTS)
     generation = await locks.acquire("gpu-0")
     assert generation is not None
-    await until_redis_ms(client, await redis_ms(client) + 2 * 300)
+    await until_redis_ms(client, await redis_ms(client) + 2 * milliseconds(LASTS))
 
     assert await locks.extend("gpu-0", generation) is False
     assert await locks.state("gpu-0") == LockState(Liveness.GONE, None, None)
@@ -131,7 +132,7 @@ async def test_state_reads_unknown_right_after_a_wipe_and_gone_once_lasts_have_p
 
     assert first == LockState(Liveness.UNKNOWN, None, None)
     await until(settled)
-    assert await redis_ms(client) >= read_at + 300
+    assert await redis_ms(client) >= read_at + milliseconds(LASTS)
 
 
 async def test_later_acquires_shrink_the_structures_of_names_that_expired_unacquired(
@@ -147,7 +148,7 @@ async def test_later_acquires_shrink_the_structures_of_names_that_expired_unacqu
     names = [f"download-{number}" for number in range(100)]
     await asyncio.gather(*(locks.acquire(name) for name in names))
     assert await observer.zcard(keys.expiry) == 100
-    await until_redis_ms(client, await redis_ms(client) + 2 * 300)
+    await until_redis_ms(client, await redis_ms(client) + 2 * milliseconds(LASTS))
 
     for number in range(3):
         await locks.acquire(f"later-{number}")

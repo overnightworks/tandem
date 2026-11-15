@@ -6,6 +6,7 @@ import pytest
 from redis.asyncio import Redis
 
 from tandem import Locks, Script
+from tandem.deadlines import milliseconds
 from tests.support.locks import wipe
 from tests.support.waiting import until
 
@@ -31,9 +32,9 @@ class Admit:
 
     async def __call__(self, name: str) -> bool:
         keys = self._locks.keys
-        lasts_ms = self._locks.lasts // timedelta(milliseconds=1)
         reply = await self._script.run(
-            [keys.epoch, keys.expiry, keys.generation, self._depth], [name, lasts_ms]
+            [keys.epoch, keys.expiry, keys.generation, self._depth],
+            [name, milliseconds(self._locks.lasts)],
         )
         return reply == 1
 
