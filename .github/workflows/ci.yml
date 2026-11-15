@@ -34,8 +34,8 @@ jobs:
       - name: Static checks
         run: scripts/run_static_checks.sh
 
-      - name: Tests
-        run: uv run --locked pytest tests -q -n auto --cov=logline --cov-report=xml --cov-report=term-missing:skip-covered # NOSONAR(S8541) the project builds itself from this checkout and --no-build refuses that while every dependency is a wheel in uv.lock
+      - name: Tests against a throwaway Redis
+        run: scripts/run_redis_tests.sh tests -q -n auto --cov=tandem --cov-report=xml --cov-report=term-missing:skip-covered
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
@@ -70,8 +70,8 @@ jobs:
       - name: Install the lowest declared versions
         run: uv pip install --resolution lowest-direct -e . --group dev # NOSONAR(S8541,S8544) the project builds itself from this checkout and lowest-direct resolves the declared floors on purpose so it has no lock
 
-      - name: Tests
-        run: .venv/bin/pytest tests -q -n auto
+      - name: Tests against a throwaway Redis
+        run: scripts/run_redis_tests.sh tests -q -n auto
 
   quality:
     name: quality
