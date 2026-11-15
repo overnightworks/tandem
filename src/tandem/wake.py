@@ -1,6 +1,7 @@
 """WakeChannel: tell the pods of one app that something changed, and when to re-read everything."""
 
 import asyncio
+import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
@@ -12,6 +13,8 @@ from redis.asyncio.connection import AbstractConnection
 
 from tandem.errors import StoreError
 from tandem.keys import wake_channel
+
+logger = logging.getLogger(__name__)
 
 BACKOFF_FIRST_SECONDS = 0.5
 BACKOFF_CAP_SECONDS = 5.0
@@ -68,7 +71,10 @@ class WakeChannel:
         await connection.read_response()
 
     async def received(self) -> AsyncIterator[Wake | Resubscribed]:
-        """Yield every confirmation of the subscription and every wake after it, until cancelled."""
+        """Yield every confirmation of the subscription and every wake after it, until cancelled.
+
+        A payload that is no valid UTF-8 is logged and skipped.
+        """
         backoff = BACKOFF_FIRST_SECONDS
         while True:
             pubsub = self._redis.pubsub(ignore_subscribe_messages=False)
@@ -79,6 +85,8 @@ class WakeChannel:
                     if message is None:  # the reply to redis-py's health check is no event
                         continue
                     event = self._event(message)
+                    if event is None:
+                        continue
                     if isinstance(event, Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                     yield event
@@ -103,7 +111,13 @@ class WakeChannel:
                 await pubsub.unsubscribe(self._channel)
         await pubsub.aclose()
 
-    def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
+    def _event(self, message: dict[str, object]) -> Wake | Resubscribed | None:
         if message["type"] == "subscribe":
             return Resubscribed()
-        return Wake(self._redis.get_encoder().decode(message["data"], force=True))
+        data = message["data"]
+        try:
+            return Wake(self._redis.get_encoder().decode(data, force=True))
+        except UnicodeDecodeError:
+            # One payload no pod of this app published must not end the subscription for good.
+            logger.warning("skipped a wake payload of %d bytes that is no valid UTF-8", len(data))
+            return None
