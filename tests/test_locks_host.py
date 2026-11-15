@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Callable
 from datetime import timedelta
 
@@ -92,9 +93,54 @@ async def test_a_host_admit_after_a_wipe_creates_the_epoch_and_refuses_until_las
     assert await _depth_of(observer, depth) == 1
 
 
-@pytest.mark.parametrize("admit_before_acquire", [True, False])
-async def test_a_reserve_that_reads_the_depth_around_its_acquire_never_leaves_a_lock_beside_a_depth(
-    admit_before_acquire: bool,
+BOUND_SECONDS = 10
+
+
+class Reserve:
+    """A host's reserve: read the depth, acquire, read the depth again and give the lock back when
+    it rose. An admit waits at one barrier of it and runs there, while the reserve waits."""
+
+    def __init__(self, locks: Locks, observer: Redis, depth: str, admit_at: int) -> None:
+        self._locks = locks
+        self._observer = observer
+        self._depth = depth
+        self._admit_at = admit_at
+        self._reached = asyncio.Event()
+        self._admitted = asyncio.Event()
+
+    async def _barrier(self, position: int) -> None:
+        if position == self._admit_at:
+            self._reached.set()
+            await self._admitted.wait()
+
+    async def reserve(self, name: str) -> None:
+        assert await _depth_of(self._observer, self._depth) == 0
+        await self._barrier(0)
+        generation = await self._locks.acquire(name)
+        assert generation is not None
+        await self._barrier(1)
+        if await _depth_of(self._observer, self._depth) > 0:
+            await self._locks.release(name, generation)
+        await self._barrier(2)
+
+    async def admit_at_the_barrier(self, admit: Admit, name: str) -> bool:
+        await self._reached.wait()
+        admitted = await admit(name)
+        self._admitted.set()
+        return admitted
+
+
+@pytest.mark.parametrize(
+    ("admit_at", "admitted"),
+    [
+        pytest.param(0, True, id="before-the-acquire"),
+        pytest.param(1, False, id="after-the-acquire"),
+        pytest.param(2, False, id="after-the-second-depth-read"),
+    ],
+)
+async def test_an_admit_racing_a_reserve_never_leaves_a_lock_beside_a_depth(
+    admit_at: int,
+    admitted: bool,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
@@ -103,17 +149,13 @@ async def test_a_reserve_that_reads_the_depth_around_its_acquire_never_leaves_a_
 ):
     client = make_client(redis_url)
     locks = new_locks(client)
-    admit = Admit(client, locks, depth)
+    race = Reserve(locks, observer, depth, admit_at)
 
-    assert await _depth_of(observer, depth) == 0
-    if admit_before_acquire:
-        await admit("gpu-0")
-    generation = await locks.acquire("gpu-0")
-    assert generation is not None
-    if not admit_before_acquire:
-        await admit("gpu-0")
-    if await _depth_of(observer, depth) > 0:
-        await locks.release("gpu-0", generation)
+    async with asyncio.timeout(BOUND_SECONDS):
+        _, admit_reply = await asyncio.gather(
+            race.reserve("gpu-0"), race.admit_at_the_barrier(Admit(client, locks, depth), "gpu-0")
+        )
 
+    assert admit_reply is admitted
     held = (await locks.state("gpu-0")).generation is not None
     assert not (held and await _depth_of(observer, depth) > 0)
