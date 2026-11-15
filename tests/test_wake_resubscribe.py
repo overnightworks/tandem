@@ -3,7 +3,6 @@ import contextlib
 import sys
 from collections.abc import Callable
 
-import pytest
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
@@ -82,10 +81,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     key_prefix: str,
     redis_url: str,
     backoffs: Backoffs,
-    monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(wake, "BACKOFF_FIRST_SECONDS", 0.01)
-    monkeypatch.setattr(wake, "BACKOFF_CAP_SECONDS", 0.04)
     client = make_client(_through(proxy), retry=Retry(NoBackoff(), 1))
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=backoffs)
