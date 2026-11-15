@@ -1,8 +1,0 @@
-claim_id = "d4e88a152b6e43fea343925b30c6bf52"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "b9ea3dc0e402d08d8643c83991affc2b684bfdd2"
-branch = "claude/issue-16-tandem-logs-through-logline"
-scope = [".importlinter", "AGENTS.md", "README.md", "docs", "pyproject.toml", "src", "tests", "uv.lock"]
-opened_commit = "797d4f8a9bbea7e366b59a51388e0f3b65c0b658"
-whole_reason = "One dependency switch whose log points, import contract, lockfile and docs change together."
