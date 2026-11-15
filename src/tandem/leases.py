@@ -506,7 +506,12 @@ class Leases:
                                 **fields,
                             },
                         )
-                        unextended.add(due)
+                        if error.outage:
+                            # Redis may have applied the extension before its reply was lost, so
+                            # the claim's end is unknown: stop watching rather than call it expired.
+                            pending.discard(due)
+                        else:
+                            unextended.add(due)
                         continue
                     runs_out_at[due] = time.monotonic() + claim_seconds
                 if not kept:

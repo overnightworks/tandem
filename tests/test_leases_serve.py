@@ -450,6 +450,36 @@ async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
     assert claim_events == ["lapse_claim_extension.failed", "lapse_claim.expired"]
 
 
+async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expired(
+    proxy: TcpProxy,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
+    leases = new_leases(
+        make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
+    )
+    running = Handled(hold=True)
+
+    async with serving(leases, running):
+        await running.received()
+        proxy.cut()
+        (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
+        loop = asyncio.get_running_loop()
+        claim_over_at = loop.time() + 2 * CLAIM_FOR.total_seconds()
+
+        async def claim_is_over() -> bool:
+            return loop.time() >= claim_over_at
+
+        await until(claim_is_over)
+        running.release()
+
+    assert line["reason"] == "outage"
+    assert not log_lines.of("lapse_claim.expired", _LOGGER)
+
+
 async def test_a_claim_that_runs_out_is_logged_without_its_generation(
     redis_url: str,
     make_client: Callable[..., Redis],
