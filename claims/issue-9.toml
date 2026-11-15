@@ -1,0 +1,8 @@
+claim_id = "8e8611fbc8a841d18250b098a5fe5649"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "c3db43ca664d556d126ea6559283763f73f07833"
+branch = "claude/issue-9-tandem-0-1-1-wakechannel-survives-a-payl"
+scope = ["README.md", "docs/ARCHITECTURE.md", "src/tandem/__init__.py", "src/tandem/wake.py", "tests"]
+opened_commit = "0862b0942ac3fc1d71fc658159db7ab3c6fe7368"
+whole_reason = "One behaviour of WakeChannel with its test, its docs and the version raise; it does not split."
