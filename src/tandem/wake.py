@@ -25,7 +25,7 @@ from tandem.keys import wake_channel
 logger: logging.Logger = logging.getLogger(__name__)
 
 # A payload is the decimal byte length of the traceparent, a colon, the traceparent and the address.
-_TRACEPARENT_LENGTH = re.compile(rb"([0-9]{1,9}):")
+_TRACEPARENT_LENGTH = re.compile(rb"(\d{1,9}):")
 
 
 @dataclass(frozen=True)
