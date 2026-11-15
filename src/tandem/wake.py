@@ -5,6 +5,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
+from typing import cast
 
 from redis import exceptions as redis_errors
 from redis.asyncio import Redis
@@ -14,7 +15,7 @@ from redis.asyncio.connection import AbstractConnection
 from tandem.errors import StoreError
 from tandem.keys import wake_channel
 
-logger = logging.getLogger(__name__)
+logger: logging.Logger = logging.getLogger(__name__)
 
 BACKOFF_FIRST_SECONDS = 0.5
 BACKOFF_CAP_SECONDS = 5.0
@@ -119,5 +120,6 @@ class WakeChannel:
             return Wake(self._redis.get_encoder().decode(data, force=True))
         except UnicodeDecodeError:
             # One payload no pod of this app published must not end the subscription for good.
-            logger.warning("skipped a wake payload of %d bytes that is no valid UTF-8", len(data))
+            payload_length = len(cast(bytes, data))
+            logger.warning("skipped a wake payload of %d bytes, no valid UTF-8", payload_length)
             return None
