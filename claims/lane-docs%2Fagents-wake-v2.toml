@@ -1,0 +1,7 @@
+claim_id = "8b879b4b5c89433ebf9cd5ac90e8987b"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "8790769c1681b7b28fee7ad4d7399b5cff4e5a48"
+branch = "docs/agents-wake-v2"
+scope = ["AGENTS.md"]
+opened_commit = "649ef5c3b807cd2d302951d36a849fa787fb4f21"
