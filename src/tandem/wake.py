@@ -2,11 +2,12 @@
 
 import asyncio
 import logging
+import re
 from collections.abc import AsyncIterator
 from contextlib import suppress
 from dataclasses import dataclass
 
-from logline import StepTimer
+from logline import StepTimer, current_traceparent
 from redis import exceptions as redis_errors
 from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
@@ -23,10 +24,14 @@ from tandem.keys import wake_channel
 
 logger: logging.Logger = logging.getLogger(__name__)
 
+# A payload is the decimal byte length of the traceparent, a colon, the traceparent and the address.
+_TRACEPARENT_LENGTH = re.compile(rb"(\d{1,9}):")
+
 
 @dataclass(frozen=True)
 class Wake:
     address: str  # what changed, never its content
+    traceparent: str | None = None  # the sender's trace as it sent it; None when it had none
 
 
 @dataclass(frozen=True)
@@ -40,11 +45,14 @@ class WakeChannel:
         self._channel = wake_channel(key_prefix)
 
     async def publish(self, address: str) -> None:
-        """Send one PUBLISH. A failure means the delivery is uncertain; it is not resent."""
-        async with StepTimer("wake_publication.ended", logger):
-            await self._publish(address)
+        """Send one PUBLISH of `address` with the caller's current trace.
 
-    async def _publish(self, address: str) -> None:
+        A failure means the delivery is uncertain; it is not resent.
+        """
+        async with StepTimer("wake_publication.ended", logger):
+            await self._publish(address, current_traceparent())
+
+    async def _publish(self, address: str, traceparent: str | None) -> None:
         # The client's own execute_command would run the PUBLISH under the client's Retry, which can
         # send it again after a lost reply; the connection is driven directly instead.
         redis = self._redis
@@ -63,25 +71,29 @@ class WakeChannel:
                         "Redis._single_conn_lock, which this redis-py version does not have"
                     ) from error
                 async with lock:
-                    await self._send_publish(own, address)
+                    await self._send_publish(own, address, traceparent)
             else:
                 pool = redis.connection_pool
                 connection = await pool.get_connection()
                 try:
-                    await self._send_publish(connection, address)
+                    await self._send_publish(connection, address, traceparent)
                 finally:
                     await pool.release(connection)
         except redis_errors.RedisError as error:
             raise store_error(f"publish to {self._channel}", error) from error
 
-    async def _send_publish(self, connection: AbstractConnection, address: str) -> None:
-        await connection.send_command("PUBLISH", self._channel, address)
+    async def _send_publish(
+        self, connection: AbstractConnection, address: str, traceparent: str | None
+    ) -> None:
+        trace = connection.encoder.encode(traceparent or "")
+        payload = b"%d:%b%b" % (len(trace), trace, connection.encoder.encode(address))
+        await connection.send_command("PUBLISH", self._channel, payload)
         await connection.read_response()
 
     async def received(self) -> AsyncIterator[Wake | Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled.
 
-        A payload that is no valid UTF-8 is logged and skipped.
+        A payload that is no valid UTF-8 or no frame is logged and skipped.
         """
         backoff = BACKOFF_FIRST_SECONDS
         failed_attempts = 0
@@ -99,7 +111,7 @@ class WakeChannel:
             except UnicodeDecodeError as error:
                 # A client that decodes responses fails inside get_message, which leaves the
                 # connection unusable: the subscription is established again, with a Resubscribed.
-                self._log_skipped_payload(error)
+                self._log_skipped_payload("invalid_utf8", len(error.object))
                 continue
             except redis_errors.RedisError as error:
                 if not is_outage(error):
@@ -117,9 +129,12 @@ class WakeChannel:
             if message is None:  # the reply to redis-py's health check is no event
                 continue
             try:
-                return self._event(message)
+                event = self._event(message)
             except UnicodeDecodeError as error:
-                self._log_skipped_payload(error)
+                self._log_skipped_payload("invalid_utf8", len(error.object))
+                continue
+            if event is not None:
+                return event
 
     async def _wait(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
@@ -131,11 +146,10 @@ class WakeChannel:
                 await pubsub.unsubscribe(self._channel)
         await pubsub.aclose()
 
-    def _log_skipped_payload(self, error: UnicodeDecodeError) -> None:
+    def _log_skipped_payload(self, reason: str, payload_bytes: int) -> None:
         # One payload no pod of this app published must not end the subscription for good.
         logger.warning(
-            "wake_payload.skipped",
-            extra={"reason": "invalid_utf8", "payload_bytes": len(error.object)},
+            "wake_payload.skipped", extra={"reason": reason, "payload_bytes": payload_bytes}
         )
 
     def _log_lost(self, error: redis_errors.RedisError, failed_attempts: int) -> None:
@@ -154,7 +168,29 @@ class WakeChannel:
     def _log_confirmed(self, failed_attempts: int) -> None:
         logger.info("wake_subscription.confirmed", extra={"failed_attempt_count": failed_attempts})
 
-    def _event(self, message: dict[str, object]) -> Wake | Resubscribed:
+    def _event(self, message: dict[str, object]) -> Wake | Resubscribed | None:
+        """The event of a message; None, after its log line, for a payload that is no frame."""
         if message["type"] == "subscribe":
             return Resubscribed()
-        return Wake(self._redis.get_encoder().decode(message["data"], force=True))
+        encoder = self._redis.get_encoder()
+        payload = encoder.encode(message["data"])
+        encoder.decode(payload, force=True)  # raises UnicodeDecodeError for an undecodable payload
+        wake = self._unframe(payload)
+        if wake is None:
+            self._log_skipped_payload("malformed_frame", len(payload))
+        return wake
+
+    def _unframe(self, payload: bytes) -> Wake | None:
+        head = _TRACEPARENT_LENGTH.match(payload)
+        if head is None:
+            return None
+        trace_end = head.end() + int(head[1])
+        if trace_end > len(payload):
+            return None
+        encoder = self._redis.get_encoder()
+        try:
+            traceparent = encoder.decode(payload[head.end() : trace_end], force=True)
+            address = encoder.decode(payload[trace_end:], force=True)
+        except UnicodeDecodeError:  # the length cuts a character in two
+            return None
+        return Wake(address, traceparent or None)

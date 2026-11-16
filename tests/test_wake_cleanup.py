@@ -6,6 +6,7 @@ from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
 
 from tandem import WakeChannel
+from tandem.keys import wake_channel
 from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
@@ -15,7 +16,7 @@ from tests.support.waiting import until
 async def _nothing_is_left(
     observer: Redis, key_prefix: str, tasks_before: set[asyncio.Task[object]], proxy: TcpProxy
 ) -> None:
-    channel = f"{key_prefix}:tandem:v1:wake"
+    channel = wake_channel(key_prefix)
 
     async def subscribers_gone() -> bool:
         return (await observer.pubsub_numsub(channel))[0][1] == 0

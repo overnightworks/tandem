@@ -1,4 +1,5 @@
-"""A publisher that sends numbered addresses without pause and keeps the receiver count of each."""
+"""A publisher that sends numbered addresses without pause, as frames with no trace, and keeps the
+receiver count of each."""
 
 import asyncio
 
@@ -25,7 +26,7 @@ class NumberedPublisher:
     async def _publish(self) -> None:
         number = 0
         while not self._stopped.is_set():
-            receivers = await self._client.publish(self._channel, str(number))
+            receivers = await self._client.publish(self._channel, f"0:{number}")
             self.sent.append((number, receivers))
             if receivers == 0:
                 self.zero_seen.set()

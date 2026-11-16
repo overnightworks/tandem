@@ -21,7 +21,7 @@ def checked_segment(value: str, *, argument: str) -> str:
 
 def wake_channel(key_prefix: str) -> str:
     """The wake channel of the app that owns `key_prefix`."""
-    return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1:wake"
+    return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v2:wake"
 
 
 @dataclass(frozen=True)

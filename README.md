@@ -32,6 +32,7 @@ because Dependabot looks the name up on PyPI. Tags are never moved; a broken rel
 ```python
 from datetime import timedelta
 
+from logline import unit_trace
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
@@ -67,8 +68,9 @@ async def follow_changes(served: Served) -> None:
         match event:
             case Resubscribed():
                 await served.reread_everything()
-            case Wake(address):
-                await served.reread(address)
+            case Wake(address, traceparent):
+                with unit_trace(traceparent):  # the handling joins the sender's trace (see duty 15)
+                    await served.reread(address)
 
 
 async def save(served: Served, address: str, value: str) -> None:
@@ -140,9 +142,9 @@ async def train_on_gpu(job: Job) -> None:
 |---|---|
 | `WakeChannel(redis, *, key_prefix)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. |
 | `checked_segment(value, *, argument)` | The check `WakeChannel` applies to `key_prefix`: it returns `value` when it is one segment matching `[a-z0-9][a-z0-9-]*` and raises `ValueError` naming `argument` otherwise. A host that derives a prefix, such as `<prefix>-agents`, validates it with this before it builds a channel. |
-| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content. It raises `StoreError` when Redis refuses or does not answer; a Redis that stays silent fails it only when the host's client sets `socket_timeout` and `socket_connect_timeout`, which default to none, so without them `publish` waits for ever. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with an unreachable Redis `publish` can block for about the `Retry`'s total plus each attempt's connect timeout before it raises. |
+| `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content, with the caller's current traceparent (logline's `current_traceparent()`; none outside a trace). It raises `StoreError` when Redis refuses or does not answer; a Redis that stays silent fails it only when the host's client sets `socket_timeout` and `socket_connect_timeout`, which default to none, so without them `publish` waits for ever. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with an unreachable Redis `publish` can block for about the `Retry`'s total plus each attempt's connect timeout before it raises. |
 | `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
-| `Wake(address)` | A pod published `address`. |
+| `Wake(address, traceparent=None)` | A pod published `address` while it was in the trace `traceparent`; None when its sender had none. It is the sender's value as received: tandem validates nothing, and logline's `unit_trace` starts a new trace for a malformed one. |
 | `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
 | `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else (a `claim_for` that is no `timedelta` included) raises `ValueError` naming the argument. A deadline key is any string. |
 | `await deadlines.set(key, due_in)` | `key` comes due `due_in` after now on Redis `TIME` (a pod's clock is never read). A `key` that already waits is re-armed; a `key` that a claimer holds is re-armed too and the claim is void, so the claimer's later `done` returns False and leaves the new deadline. |
@@ -182,7 +184,7 @@ async def train_on_gpu(job: Job) -> None:
 | `tandem.deadline_cancel(keys, key)` | The transition of `Deadlines.cancel`. Returns 1 or 0. |
 | `tandem.deadline_state(keys, key)` | Reads without changing: `{'waiting', due_ms}` while the key waits, `{'claimed', claim_until_ms}` while a claim holds it, nil otherwise. A claim past its expiry that nobody took over still reads as claimed. |
 | `tandem.lock_state(keys, name, lasts_ms)` | Reads a lock without changing it, apart from creating the epoch when absent. `keys` has the fields `epoch`, `expiry` and `generation` (`locks.keys`); `lasts_ms` is `locks.lasts` in ms. Returns `{'held', generation, expires_ms}` while a live lock holds `name`, `{'unknown'}` while it is absent and `lasts_ms` have not passed since the epoch, and nil when it is free. `if tandem.lock_state(...) then` therefore refuses unless the lock is free and settled, so a host's admit script reads the lock and writes its own state in one atomic step. |
-| `tandem.wake(channel, address)` | One `PUBLISH` of `address` inside the script, atomic with its writes; `channel` is `wake_channel(key_prefix)`. Returns the number of subscribers reached. |
+| `tandem.wake(channel, address, traceparent)` | One `PUBLISH` of `address` inside the script, atomic with its writes; `channel` is `wake_channel(key_prefix)`. `traceparent` is optional: a Lua script cannot read the trace, so a host passes `current_traceparent()` from Python as an argument, and without it the wake carries none. Returns the number of subscribers reached. |
 | `wake_channel(key_prefix)` | The name of the wake channel, for `tandem.wake`. |
 | `DeadlineKeys` | The record `deadlines.keys` returns. |
 | `StoreError` | Redis refused or timed out; the cause is chained. |
@@ -200,18 +202,21 @@ structure. A name is a ZSET member and a HASH field, never a key segment. Each `
 batch of expired entries of its family, so names that are never acquired again leave over time. A lock has
 no lapse queue: a crashed holder's lock expires after `lasts`, and what follows is the host's reapers'.
 
-The channel is `<key_prefix>:tandem:v1:wake`: one channel per key prefix, so every pod that follows the
+The channel is `<key_prefix>:tandem:v2:wake`: one channel per key prefix, so every pod that follows the
 same channel uses the same `key_prefix`. An app may run several `WakeChannel`s on one Redis under distinct
-prefixes, for example `skat` and `skat-agents`.
+prefixes, for example `skat` and `skat-agents`. A pod on a tandem before 0.8.0 publishes and listens on
+`<key_prefix>:tandem:v1:wake`, so it and a pod on 0.8.0 or later never hear each other: the host restarts
+all its pods at once when it moves to 0.8.0, and a rollback goes back for all pods at once as well.
 
 `received()` hides no reconnect. When the connection breaks, redis-py reconnects inside the retry budget of
 the host's client, or tandem backs off (0.5 s doubling to 5 s, with no attempt limit), subscribes again and
 carries on; either way the next event is a `Resubscribed`, before any wake it covers. Only a command Redis
 refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends `received()` with
-`StoreError`. A payload that is no valid UTF-8 is skipped with a `wake_payload.skipped` warning that
-names its length, never its content; the next valid wake arrives as before. A client that decodes responses
-(`decode_responses=True`) fails inside redis-py on such a payload, so tandem subscribes again and a
-`Resubscribed` precedes that wake.
+`StoreError`. A payload that is no valid UTF-8, or no frame of tandem's, is skipped with a
+`wake_payload.skipped` warning that names its length, never its content; the next valid wake arrives as before. A client that decodes responses
+(`decode_responses=True`) fails inside redis-py on a payload that is no valid UTF-8, so tandem subscribes
+again and a `Resubscribed` precedes the next wake; a readable payload that is no frame is skipped on the
+existing subscription, without a `Resubscribed`.
 
 The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`, disjoint
 from the channel and from every other kind. `claim_for` is the same for every pod of one kind. A claim whose
@@ -240,7 +245,7 @@ handler gets an ordinary record at its own level and handler, the fields kept. t
 | `lapse_claim.expired`, a claim that ran out after its extension was refused or answered false; never after an outage, whose result is unknown | `tandem.leases` | warning | `lease_family`, `holder_id` |
 | `wake_subscription.lost`, once per outage; its further attempts | `tandem.wake` | warning; debug | `reason` (`outage`), `error_type`, `failed_attempt_count` |
 | `wake_subscription.confirmed`, each `Resubscribed` | `tandem.wake` | info | `failed_attempt_count` |
-| `wake_payload.skipped` | `tandem.wake` | warning | `reason` (`invalid_utf8`), `payload_bytes` |
+| `wake_payload.skipped` | `tandem.wake` | warning | `reason` (`invalid_utf8` or `malformed_frame`), `payload_bytes` |
 
 - `outcome` is `ok`, `failed` or `cancelled`; a failed call raises `StoreError` after its line, and a
   `False` or `None` answer is `ok`. A `kept` writes `lease_renewal.ended` for its first renewal only: its
@@ -249,14 +254,16 @@ handler gets an ordinary record at its own level and handler, the fields kept. t
 - A refusal that reaches the host as `StoreError` out of `serve_lapses` or `received()` writes no line:
   the host's layer logs it.
 - A holder is an id (see duty 14), so `holder_id` is the holder string. No line carries a generation, a lapse's
-  key, a wake payload or the text of a `StoreError`.
+  key, a wake payload, a traceparent or the text of a `StoreError`.
 - A lapse is delivered at least once, so a replayed lapse writes a second `lapse_handling.ended`.
-- The wake carries no trace: the lines of a pod that re-reads on a wake are in the pod's own trace.
+- The wake carries its sender's traceparent: a host that handles a wake under `unit_trace(wake.traceparent)`
+  writes those lines in the sender's trace (duty 15); without it they are in the pod's own context.
 
 ## The host's duties
 
 Redis pub/sub delivers a wake to the readers subscribed at that moment and keeps nothing. Three duties
-close that gap, two more cover deadlines, four cover leases, four cover locks and one covers logs:
+close that gap, two more cover deadlines, four cover leases, four cover locks, one covers logs and one
+covers traces:
 
 1. **Re-read everything the pod serves at each `Resubscribed`.** A wake sent while the pod was
    disconnected is gone for good; the `Resubscribed` after the reconnect is the signal that anything may
@@ -307,6 +314,17 @@ close that gap, two more cover deadlines, four cover leases, four cover locks an
     own state again, it releases the lock if that state says another claim came first.
 14. **A holder is an id, never a name, an e-mail address or content.** tandem writes the holder as
     `holder_id` in its lines, so a holder that names a person puts that person in the log.
+15. **Handle each `Wake` inside `with unit_trace(wake.traceparent):`.** `received()` sets no trace, since a
+    context set across its `yield` would leak into the host's loop. The block starts a unit in the sender's
+    trace, or in a new one when `traceparent` is None or malformed, and ends it at the block's exit:
+
+    ```python
+    from logline import unit_trace
+
+    case Wake(address, traceparent):
+        with unit_trace(traceparent):
+            await served.reread(address)
+    ```
 
 ## Fleet standard: cross-pod coordination in Redis
 
@@ -349,7 +367,9 @@ and the ruling is recorded in this section; the process is marketplace's
 ## Versioning
 
 `tandem.__version__` is the one version. A change of a public name, its type or its meaning is stated in
-the pull request as **Breaking** with the hosts' migration. The names and fields of the log events are
+the pull request as **Breaking** with the hosts' migration. The wake channel's version segment is part of
+the contract between pods of different releases: raising it, as 0.8.0 did to `v2`, is **Breaking**, and
+pods on either side of it do not hear each other. The names and fields of the log events are
 public too: renaming one is **Breaking** on the release page.
 
 ## Development
