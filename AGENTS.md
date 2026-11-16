@@ -16,7 +16,7 @@
 - Every log point is a literal `<noun>.<verb_past>` event on `tandem.<module>` with its fields in `extra=`; tandem never calls logline's `configure` or structlog. The event names are public (README, "What tandem logs").
 - Every name tandem gives in Redis is built in `tandem.keys`; no other module writes a key or channel literal.
 - Tests run every cell against a real Redis through `scripts/run_redis_tests.sh`; outages go through `tests/support/proxy.py`; waits are barriers and bounded waits, never sleeps; a stimulus that is time itself waits on the loop clock through `until`. Each test uses the `key_prefix` fixture, so tests share one server in parallel. Branch coverage stays 100 %.
-- The published channel name and the `Resubscribed` ordering are a contract between pods of different releases: a change to `<prefix>:tandem:v1:wake` raises the version segment.
+- The published channel name and the `Resubscribed` ordering are a contract between pods of different releases: a change to `<prefix>:tandem:v2:wake` raises the version segment.
 - A name is public when `tandem/__init__.py`'s `__all__` lists it. A pull request that changes a public name states its **Breaking** line and the hosts' migration or "No migration".
 
 ## Owners
