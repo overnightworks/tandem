@@ -1,8 +1,0 @@
-claim_id = "29dfb12c3b19454f91cfa7fcda945eaa"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "fabb27adc63aef2071848a9d218a7a7508c21c76"
-branch = "claude/issue-33-tandem-admits-logline-0-5"
-scope = ["README.md", "pyproject.toml", "src/tandem/__init__.py", "uv.lock"]
-opened_commit = "e2619c54c3b51bfc1c518fe5db9e9b8e7fb58641"
-whole_reason = "One dependency range widening with its lock, README range and version raise."
