@@ -36,9 +36,7 @@ class FakeWakeBus:
 
     def pod(self) -> FakeWakeChannel:
         """The channel of one more pod of the app."""
-        channel = FakeWakeChannel(self)
-        self._pods.append(channel)
-        return channel
+        return FakeWakeChannel(self)
 
     def _broadcast(self, wake: Wake) -> None:
         for pod in self._pods:
@@ -57,6 +55,7 @@ class FakeWakeChannel(_Following):
     def __init__(self, bus: FakeWakeBus) -> None:
         super().__init__("the fake wake channel")
         self._bus = bus
+        bus._pods.append(self)
         self._subscriptions: set[asyncio.Queue[Wake | _Resubscribed | StoreError]] = set()
         self._withholding_confirmation = False
         self._refusal: StoreError | None = None
@@ -66,7 +65,12 @@ class FakeWakeChannel(_Following):
         self._bus._broadcast(Wake(address, current_traceparent()))
 
     def resync(self) -> None:
-        """Confirm the subscription of every following of this pod again, as a reconnect does."""
+        """Confirm the subscription of every following of this pod again, as a reconnect does.
+
+        A pod that is not followed has no connection to reconnect: its withholding stays.
+        """
+        if self._subscriptions:
+            self._withholding_confirmation = False
         self._deliver(_Resubscribed())
 
     def withhold_confirmation(self) -> None:
@@ -88,12 +92,17 @@ class FakeWakeChannel(_Following):
         inbox: asyncio.Queue[Wake | _Resubscribed | StoreError] = asyncio.Queue()
         self._subscriptions.add(inbox)
         try:
-            if not self._withholding_confirmation:
+            confirmed = not self._withholding_confirmation
+            if confirmed:
                 yield _Resubscribed()
             while True:
                 event = await inbox.get()
                 if isinstance(event, StoreError):
                     raise event
-                yield event
+                if isinstance(event, _Resubscribed):
+                    confirmed = True
+                # Redis delivers no wake before it confirmed the subscription.
+                if confirmed:
+                    yield event
         finally:
             self._subscriptions.discard(inbox)
