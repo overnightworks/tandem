@@ -190,6 +190,11 @@ def _has_failed(handlers: Handlers) -> Callable[[], Awaitable[bool]]:
     return failed
 
 
+async def _publish_and_await_failure(channel: WakeChannel, handlers: Handlers) -> None:
+    await channel.publish("orders/7")
+    await until(_has_failed(handlers))
+
+
 class _WakeBufferedWithTheFirstConfirmation(WakeChannel):
     """A channel whose first confirmation is followed at once by a wake, as one read can bring."""
 
@@ -229,8 +234,7 @@ async def test_an_on_failed_that_raises_is_raised_out_of_the_exit(
 
     with pytest.raises(ValueError, match="the host's own error"):
         async with following:
-            await channel.publish("orders/7")
-            await until(_has_failed(handlers))
+            await _publish_and_await_failure(channel, handlers)
 
 
 @pytest.mark.parametrize("ready_within", [timedelta(0), timedelta(seconds=-1), 10, 10.0])
