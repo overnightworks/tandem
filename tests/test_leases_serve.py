@@ -89,7 +89,7 @@ async def test_a_handler_that_runs_past_claim_for_keeps_its_lapse_from_others_an
 
     async with serving(first, running):
         await running.received()
-        async with serving(second, other, claimer="the other"):
+        async with serving(second, other):
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
             assert other.lapses == []
             running.release()
@@ -124,9 +124,7 @@ async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handl
         if len(attempts) == 1:
             raise RuntimeError("the handler fails")
 
-    task = asyncio.create_task(
-        serving_leases.serve_lapses(failing_once, claimer="the test", every=SERVING_EVERY)
-    )
+    task = asyncio.create_task(serving_leases.serve_lapses(failing_once, every=SERVING_EVERY))
     try:
         proxy.cut()
         await backoffs.reached(2)
@@ -153,9 +151,7 @@ async def test_a_refusal_ends_serve_lapses_with_store_error(
     new_leases: Callable[..., Leases],
 ):
     leases = new_leases(make_client(await url_denying("evalsha")))
-    task = asyncio.create_task(
-        leases.serve_lapses(Handled(), claimer="the test", every=SERVING_EVERY)
-    )
+    task = asyncio.create_task(leases.serve_lapses(Handled(), every=SERVING_EVERY))
 
     assert isinstance(await ended(task), StoreError)
 
@@ -194,7 +190,7 @@ async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handle
 
     async with serving(first, running):
         await running.received()
-        async with serving(second, other, claimer="the other"):
+        async with serving(second, other):
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
             assert other.lapses == []
             running.release()
@@ -525,9 +521,7 @@ async def test_an_outage_is_logged_per_failed_round_and_a_refusal_writes_no_line
         claim_for=CLAIM_FOR,
         backoffs=backoffs,
     )
-    task = asyncio.create_task(
-        leases.serve_lapses(Handled(), claimer="the test", every=SERVING_EVERY)
-    )
+    task = asyncio.create_task(leases.serve_lapses(Handled(), every=SERVING_EVERY))
     try:
         proxy.cut()
         await backoffs.reached(2)

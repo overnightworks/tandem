@@ -22,7 +22,7 @@ async def main(command: str, url: str, key_prefix: str, argument: str, *rest: st
             print("RENEWED", flush=True)
             await asyncio.Event().wait()
         else:
-            await leases.serve_lapses(report, claimer="the process", every=timedelta(seconds=0.05))
+            await leases.serve_lapses(report, every=timedelta(seconds=0.05))
     finally:
         await client.aclose()
 

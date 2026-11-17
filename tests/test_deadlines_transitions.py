@@ -97,7 +97,7 @@ async def test_cancel_removes_a_pending_or_a_claimed_key_and_voids_its_claim(
     assert await deadlines.cancel("room-1") is True
 
     assert await state_of(client, deadlines, "room-1") is None
-    assert await deadlines.claim_due(claimer="b", limit=10) == []
+    assert await deadlines.claim_due(limit=10) == []
     for due in claim:
         assert await deadlines.extend(due) is False
         assert await deadlines.done(due) is False

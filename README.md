@@ -74,7 +74,7 @@ deadlines = Deadlines(redis, key_prefix="skat", kind="seats", claim_for=timedelt
 
 
 async def expire_seats(served: Served) -> None:
-    for due in await deadlines.claim_due(claimer="pod-3", limit=20):
+    for due in await deadlines.claim_due(limit=20):
         await served.expire(seat=due.key, fence=due.claim)  # the host fences its own effect
         await deadlines.done(due)
 
