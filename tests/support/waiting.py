@@ -2,8 +2,10 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 
 BOUND_SECONDS = 15.0
+BOUND = timedelta(seconds=BOUND_SECONDS)
 _POLL_SECONDS = 0.01
 
 

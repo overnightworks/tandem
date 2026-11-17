@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import aclosing
+from datetime import timedelta
 
 import pytest
 from logline import current_traceparent, unit_trace
@@ -10,7 +11,7 @@ from tandem import StoreError, Wake, WakeChannel
 from tandem.wake import _Resubscribed
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
-from tests.support.waiting import BOUND_SECONDS, until
+from tests.support.waiting import BOUND, until
 
 _TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
 _INCOMING_TRACEPARENT = f"00-{_TRACE_ID}-b7ad6b7169203331-01"
@@ -25,6 +26,7 @@ class Handlers:
         self.failures: list[Exception] = []
         self.raise_in_resync: Exception | None = None
         self.raise_in_wake: Exception | None = None
+        self.raise_in_failed: Exception | None = None
 
     def on_resync(self) -> None:
         self.calls.append("resync")
@@ -39,8 +41,10 @@ class Handlers:
 
     def on_failed(self, error: Exception) -> None:
         self.failures.append(error)
+        if self.raise_in_failed is not None:
+            raise self.raise_in_failed
 
-    def following(self, channel: WakeChannel, *, ready_within: float = BOUND_SECONDS):
+    def following(self, channel: WakeChannel, *, ready_within: timedelta = BOUND):
         return channel.following(
             on_resync=self.on_resync,
             on_wake=self.on_wake,
@@ -66,7 +70,7 @@ async def test_entry_raises_an_outage_when_the_subscription_is_not_confirmed_in_
     channel = WakeChannel(make_client(proxy.url), key_prefix=key_prefix)
     proxy.cut()
     tasks_before = asyncio.all_tasks()
-    following = handlers.following(channel, ready_within=0.2)
+    following = handlers.following(channel, ready_within=timedelta(seconds=0.2))
 
     with pytest.raises(StoreError) as raised:
         async with following:
@@ -214,34 +218,31 @@ async def test_a_wake_buffered_with_the_first_confirmation_is_handled_after_the_
     assert handlers.calls == ["resync", "orders/7"]
 
 
-async def test_an_on_failed_that_raises_does_not_raise_out_of_the_exit_and_reaches_the_loop_handler(
+async def test_an_on_failed_that_raises_is_raised_out_of_the_exit(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
     handlers = Handlers()
     handlers.raise_in_wake = RuntimeError("the handler")
+    handlers.raise_in_failed = ValueError("the host's own error")
     channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
-    loop = asyncio.get_running_loop()
-    reported: list[BaseException | None] = []
-    previous_handler = loop.get_exception_handler()
-    loop.set_exception_handler(lambda _loop, context: reported.append(context.get("exception")))
+    following = handlers.following(channel)
 
-    def on_failed(error: Exception) -> None:
-        raise ValueError("on_failed") from error
-
-    async def reported_one() -> bool:
-        return bool(reported)
-
-    try:
-        async with channel.following(
-            on_resync=handlers.on_resync,
-            on_wake=handlers.on_wake,
-            on_failed=on_failed,
-            ready_within=BOUND_SECONDS,
-        ):
+    with pytest.raises(ValueError, match="the host's own error"):
+        async with following:
             await channel.publish("orders/7")
-            await until(reported_one)
-    finally:
-        loop.set_exception_handler(previous_handler)
+            await until(_has_failed(handlers))
 
-    (exception,) = reported
-    assert isinstance(exception, ValueError)
+
+@pytest.mark.parametrize("ready_within", [timedelta(0), timedelta(seconds=-1), 10, 10.0])
+async def test_a_ready_within_that_is_no_positive_timedelta_is_refused_naming_the_argument(
+    ready_within: object, redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    handlers = Handlers()
+    channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    following = handlers.following(channel, ready_within=ready_within)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="ready_within"):
+        async with following:
+            pytest.fail("the entry returned although ready_within was refused")
+
+    assert handlers.calls == []

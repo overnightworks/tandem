@@ -7,7 +7,7 @@ import sys
 from redis.asyncio import Redis
 
 from tandem import Wake, WakeChannel
-from tests.support.waiting import BOUND_SECONDS
+from tests.support.waiting import BOUND
 
 
 def _report(line: str) -> None:
@@ -25,7 +25,7 @@ async def read(channel: WakeChannel) -> None:
         on_resync=lambda: _report("RESYNCED"),
         on_wake=report_wake,
         on_failed=report_failure,
-        ready_within=BOUND_SECONDS,
+        ready_within=BOUND,
     ):
         await asyncio.Event().wait()
 

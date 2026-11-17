@@ -12,7 +12,7 @@ from tandem.wake import _Resubscribed
 from tests.support.backends import Backend
 from tests.support.logs import LogLines
 from tests.support.reader import Reader, Resynced
-from tests.support.waiting import BOUND_SECONDS, until
+from tests.support.waiting import BOUND, until
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
@@ -214,7 +214,7 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         on_resync=lambda: None,
         on_wake=handled.append,
         on_failed=lambda error: pytest.fail(f"the following failed: {error!r}"),
-        ready_within=BOUND_SECONDS,
+        ready_within=BOUND,
     ):
         await publisher.publish("a")
         await until(handled_count(1))

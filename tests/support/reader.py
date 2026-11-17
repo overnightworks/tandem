@@ -3,10 +3,11 @@
 import asyncio
 import contextlib
 from dataclasses import dataclass
+from datetime import timedelta
 from types import TracebackType
 
 from tandem import Wake, WakeChannel
-from tests.support.waiting import BOUND_SECONDS, within
+from tests.support.waiting import BOUND, within
 
 
 @dataclass(frozen=True)
@@ -15,7 +16,7 @@ class Resynced:
 
 
 class Reader:
-    def __init__(self, channel: WakeChannel, *, ready_within: float = BOUND_SECONDS) -> None:
+    def __init__(self, channel: WakeChannel, *, ready_within: timedelta = BOUND) -> None:
         self._channel = channel
         self._ready_within = ready_within
         self._events: asyncio.Queue[Wake | Resynced | BaseException] = asyncio.Queue()

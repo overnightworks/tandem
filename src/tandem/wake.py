@@ -6,6 +6,7 @@ import re
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import timedelta
 
 from logline import StepTimer, current_traceparent, unit_trace
 from redis import exceptions as redis_errors
@@ -13,6 +14,7 @@ from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
 
 from tandem.client import Client
+from tandem.deadlines import checked_span
 from tandem.errors import (
     BACKOFF_FIRST_SECONDS,
     FailureReason,
@@ -98,32 +100,34 @@ class WakeChannel:
         on_resync: Callable[[], None],
         on_wake: Callable[[Wake], None],
         on_failed: Callable[[Exception], None],
-        ready_within: float,
+        ready_within: timedelta,
     ) -> AsyncIterator[None]:
         """Follow the channel for the host while the context is open.
 
         Entering returns after Redis first confirmed the subscription and `on_resync` returned;
-        with no confirmation within `ready_within` seconds it raises `StoreError(outage=True)`.
+        with no confirmation within `ready_within`, a positive timedelta (`ValueError` otherwise),
+        it raises `StoreError(outage=True)`.
         `on_resync()` runs at every confirmation, the first and after every reconnect: re-read
         everything this pod serves. `on_wake(wake)` runs for every wake, inside the trace of its
         sender. The handlers are synchronous and run one at a time in arrival order.
 
         A refusal or a handler exception before entry returns is raised out of the entry. After it,
         either ends the following: one `wake_follow.failed` line carries the error type and
-        `on_failed(error)` is called once; an exception of `on_failed` goes to the event loop's
-        exception handler. Leaving the context cancels the following, closes the subscription and
-        raises nothing of its own.
+        `on_failed(error)` is called once; an exception of `on_failed` is the host's own error and
+        is raised out of the exit. Leaving the context cancels the following and closes the
+        subscription.
 
         A payload that is no valid UTF-8 or no frame is logged and skipped.
         """
+        wait_seconds = checked_span(ready_within, argument="ready_within").total_seconds()
         ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         entered = asyncio.Event()
         follower = asyncio.create_task(self._follow(ready, entered, on_resync, on_wake, on_failed))
         try:
-            confirmed, _ = await asyncio.wait({ready}, timeout=ready_within)
+            confirmed, _ = await asyncio.wait({ready}, timeout=wait_seconds)
             if not confirmed:
                 raise StoreError(
-                    f"subscribe to {self._channel} was not confirmed within {ready_within} s",
+                    f"subscribe to {self._channel} was not confirmed within {wait_seconds} s",
                     outage=True,
                 )
             ready.result()  # raises what stopped the following before it was ready
@@ -160,17 +164,7 @@ class WakeChannel:
                 ready.set_exception(error)
                 return
             logger.error("wake_follow.failed", extra={"error_type": type(error).__name__})
-            self._call_on_failed(on_failed, error)
-
-    def _call_on_failed(self, on_failed: Callable[[Exception], None], error: Exception) -> None:
-        # The context exit raises nothing of its own: a failing `on_failed` goes to the loop's
-        # exception handler, as the exception of any other callback does.
-        try:
             on_failed(error)
-        except Exception as handler_error:
-            asyncio.get_running_loop().call_exception_handler(
-                {"message": "on_failed of the wake following raised", "exception": handler_error}
-            )
 
     async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled."""

@@ -11,16 +11,21 @@ from tandem.keys import wake_channel
 from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
-from tests.support.waiting import BOUND_SECONDS, until, within
+from tests.support.waiting import BOUND, until, within
 
 
-def _no_task_is_left(tasks_before: set[asyncio.Task[object]], proxy: TcpProxy) -> None:
+def _no_task_is_left(
+    tasks_before: set[asyncio.Task[object]], proxy: TcpProxy | None = None
+) -> None:
     # What leaving the context awaits is gone at once; only Redis's own bookkeeping lags.
-    assert asyncio.all_tasks() <= tasks_before | proxy.tasks
+    assert asyncio.all_tasks() <= tasks_before | (proxy.tasks if proxy else set())
 
 
 async def _nothing_is_left(
-    observer: Redis, key_prefix: str, tasks_before: set[asyncio.Task[object]], proxy: TcpProxy
+    observer: Redis,
+    key_prefix: str,
+    tasks_before: set[asyncio.Task[object]],
+    proxy: TcpProxy | None = None,
 ) -> None:
     channel = wake_channel(key_prefix)
     _no_task_is_left(tasks_before, proxy)
@@ -71,7 +76,6 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
 @pytest.mark.parametrize("failing_handler", ["on_resync", "on_wake"])
 async def test_a_handler_failure_leaves_no_subscriber_no_connection_and_no_task(
     failing_handler: str,
-    proxy: TcpProxy,
     make_client: Callable[..., Redis],
     observer: Redis,
     key_prefix: str,
@@ -87,7 +91,7 @@ async def test_a_handler_failure_leaves_no_subscriber_no_connection_and_no_task(
         on_resync=fail if failing_handler == "on_resync" else lambda: None,
         on_wake=fail,
         on_failed=lambda error: failed.set(),
-        ready_within=BOUND_SECONDS,
+        ready_within=BOUND,
     )
 
     if failing_handler == "on_resync":
@@ -99,7 +103,7 @@ async def test_a_handler_failure_leaves_no_subscriber_no_connection_and_no_task(
         async with following:
             await WakeChannel(publisher_client, key_prefix=key_prefix).publish("orders/7")
             await within(failed.wait())
-        _no_task_is_left(tasks_before, proxy)
+        _no_task_is_left(tasks_before)
         await publisher_client.aclose()
 
-    await _nothing_is_left(observer, key_prefix, tasks_before, proxy)
+    await _nothing_is_left(observer, key_prefix, tasks_before)
