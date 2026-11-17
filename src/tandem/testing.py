@@ -44,7 +44,7 @@ class FakeWakeBus:
 
 
 class PublishHold:
-    """The handle `FakeWakeChannel.hold_publishes` returns: the publishes made while it holds wait."""
+    """The handle `FakeWakeChannel.hold_publishes` returns; publishes made while it holds wait."""
 
     def __init__(self) -> None:
         self._released = asyncio.Event()
@@ -105,7 +105,7 @@ class FakeWakeChannel(_Following):
         self._deliver(self._refusal)
 
     def fail_publishes(self, *errors: StoreError) -> None:
-        """Make each of the next publishes of this pod raise the next of `errors`, delivering nothing.
+        """Make the next publishes of this pod raise `errors` in order, each delivering nothing.
 
         Errors given again queue behind those not yet raised; publishes deliver once none is left.
         """
