@@ -100,3 +100,12 @@ async def test_claim_due_without_room_for_a_claim_fails_loud(
 
     with pytest.raises(ValueError, match="limit"):
         await deadlines.claim_due(limit=limit)
+
+
+async def test_claim_due_takes_no_claimer_argument(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+):
+    deadlines = new_deadlines(make_client(redis_url))
+
+    with pytest.raises(TypeError):
+        deadlines.claim_due(limit=10, claimer="pod-1")  # pyright: ignore[reportCallIssue]

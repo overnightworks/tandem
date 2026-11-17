@@ -549,3 +549,12 @@ async def test_an_outage_is_logged_per_failed_round_and_a_refusal_writes_no_line
     assert {(line["level"], line["lapse_count"]) for line in failed} == {("warning", 0)}
     refusal_period = log_lines.of_logger(_LOGGER)[written:]
     assert not [line for line in refusal_period if line["level"] in ("warning", "error")]
+
+
+async def test_serve_lapses_takes_no_claimer_argument(
+    redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+):
+    leases = new_leases(make_client(redis_url))
+
+    with pytest.raises(TypeError):
+        leases.serve_lapses(Handled(), every=SERVING_EVERY, claimer="pod-1")  # pyright: ignore[reportCallIssue]
