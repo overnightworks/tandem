@@ -10,7 +10,7 @@ from tandem.errors import StoreError
 from tandem.keys import epoch_key
 from tandem.wake import Wake, _Following, _Resubscribed
 
-__all__ = ["FakeWakeBus", "FakeWakeChannel", "settle_epoch"]
+__all__ = ["FakeWakeBus", "FakeWakeChannel", "PublishHold", "settle_epoch"]
 
 # Redis reads this integer back as the smallest signed 64-bit value, so elapsed time since the epoch
 # exceeds any `lasts` a timedelta can express.
@@ -43,6 +43,20 @@ class FakeWakeBus:
             pod._deliver(wake)
 
 
+class PublishHold:
+    """The handle `FakeWakeChannel.hold_publishes` returns; publishes made while it holds wait."""
+
+    def __init__(self) -> None:
+        self._released = asyncio.Event()
+
+    def release(self) -> None:
+        """Let the held publishes finish, in the order they were made, and stop holding."""
+        self._released.set()
+
+    async def _wait(self) -> None:
+        await self._released.wait()
+
+
 class FakeWakeChannel(_Following):
     """A `WakeChannel` of one pod of a `FakeWakeBus`, without Redis.
 
@@ -59,9 +73,15 @@ class FakeWakeChannel(_Following):
         self._subscriptions: set[asyncio.Queue[Wake | _Resubscribed | StoreError]] = set()
         self._withholding_confirmation = False
         self._refusal: StoreError | None = None
+        self._publish_failures: list[StoreError] = []
+        self._publish_hold: PublishHold | None = None
 
     async def publish(self, address: str) -> None:
         """Deliver `address`, with the caller's current trace, to every pod that follows."""
+        if self._publish_failures:
+            raise self._publish_failures.pop(0)
+        if self._publish_hold is not None:
+            await self._publish_hold._wait()
         self._bus._broadcast(Wake(address, current_traceparent()))
         # publish does not guarantee handler completion when it returns; it only yields.
         await asyncio.sleep(0)
@@ -83,6 +103,22 @@ class FakeWakeChannel(_Following):
         """End every following of this pod, and refuse the next, with a refusal `StoreError`."""
         self._refusal = StoreError(f"subscribe to {self._channel} failed: refused")
         self._deliver(self._refusal)
+
+    def fail_publishes(self, *errors: StoreError) -> None:
+        """Make the next publishes of this pod raise `errors` in order, each delivering nothing.
+
+        Errors given again queue behind those not yet raised; publishes deliver once none is left.
+        """
+        self._publish_failures.extend(errors)
+
+    def hold_publishes(self) -> PublishHold:
+        """Keep the publishes of this pod pending, delivering nothing, until the handle's `release`.
+
+        A publish already failing by `fail_publishes` raises before it waits. A later call holds
+        the publishes made after it; earlier handles keep theirs.
+        """
+        self._publish_hold = PublishHold()
+        return self._publish_hold
 
     def _deliver(self, event: Wake | _Resubscribed | StoreError) -> None:
         for inbox in self._subscriptions:

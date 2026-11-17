@@ -1,10 +1,13 @@
 """The controls of `FakeWakeChannel` that no real Redis cell has a counterpart for."""
 
 import asyncio
-from collections.abc import Callable, Coroutine
+from collections.abc import AsyncIterator, Callable, Coroutine
+from contextlib import asynccontextmanager
 from typing import Any
 
-from tandem import Wake
+import pytest
+
+from tandem import StoreError, Wake
 from tandem.testing import FakeWakeBus, FakeWakeChannel
 from tests.support.waiting import BOUND, until
 
@@ -104,3 +107,81 @@ async def test_a_channel_constructed_on_a_bus_hears_every_wake_once():
         await until(heard_both)
 
     assert addresses == ["first", "second"]
+
+
+@asynccontextmanager
+async def heard_by_a_following_pod(bus: FakeWakeBus, addresses: list[str]) -> AsyncIterator[None]:
+    async with bus.pod().following(
+        on_resync=lambda: None,
+        on_wake=lambda wake: addresses.append(wake.address),
+        on_failed=lambda error: None,
+        ready_within=BOUND,
+    ):
+        yield
+
+
+async def test_publishes_raise_the_given_errors_in_order_and_deliver_nothing_then_deliver_again():
+    bus = FakeWakeBus()
+    addresses: list[str] = []
+    publisher = bus.pod()
+    first, second = StoreError("first"), StoreError("second")
+    publisher.fail_publishes(first, second)
+    raised: list[StoreError] = []
+
+    async with heard_by_a_following_pod(bus, addresses):
+        for address in ("lost-1", "lost-2"):
+            try:
+                await publisher.publish(address)
+            except StoreError as error:
+                raised.append(error)
+        await publisher.publish("delivered")
+
+        async def heard() -> bool:
+            return addresses == ["delivered"]
+
+        await until(heard)
+
+    assert raised == [first, second]
+
+
+async def test_a_publish_made_while_held_stays_pending_and_release_delivers_in_order():
+    bus = FakeWakeBus()
+    addresses: list[str] = []
+    publisher = bus.pod()
+    hold = publisher.hold_publishes()
+
+    async with heard_by_a_following_pod(bus, addresses):
+        publishing = [asyncio.create_task(publisher.publish(a)) for a in ("one", "two", "three")]
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not any(task.done() for task in publishing)
+        assert addresses == []
+
+        hold.release()
+        await asyncio.gather(*publishing)
+
+        async def heard() -> bool:
+            return addresses == ["one", "two", "three"]
+
+        await until(heard)
+
+
+async def test_a_held_publish_cancelled_by_its_caller_delivers_nothing_even_after_release():
+    bus = FakeWakeBus()
+    addresses: list[str] = []
+    publisher = bus.pod()
+    hold = publisher.hold_publishes()
+
+    async with heard_by_a_following_pod(bus, addresses):
+        publishing = asyncio.create_task(publisher.publish("cancelled"))
+        await asyncio.sleep(0)
+        publishing.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await publishing
+        hold.release()
+        await publisher.publish("after")
+
+        async def heard() -> bool:
+            return addresses == ["after"]
+
+        await until(heard)
