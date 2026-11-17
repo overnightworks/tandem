@@ -144,7 +144,8 @@ events; they are public.
 
 **Proof strategy.** The tests run every cell against a real Redis, and the cells of the plain flow also run
 on fakeredis, the `following` cells also on the in-memory wake channel of `tandem.testing`; the lowest direct
-dependency floors run the same tests. Branch coverage is 100 %, measured over all tests. `AGENTS.md` names the commands and the rules for waits and outages.
+dependency floors run the same tests. Branch coverage is 100 %, measured over all tests. `AGENTS.md` names
+the commands and the rules for waits and outages.
 
 ## 6. Constraints and reasons
 
