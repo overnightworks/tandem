@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 
 import pytest
 from logline import current_traceparent, unit_trace
@@ -204,8 +204,11 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     handled: list[Wake] = []
 
-    async def handled_both() -> bool:
-        return len(handled) == 2
+    def handled_count(count: int) -> Callable[[], Awaitable[bool]]:
+        async def handled_so_far() -> bool:
+            return len(handled) == count
+
+        return handled_so_far
 
     async with channel.following(
         on_resync=lambda: None,
@@ -214,8 +217,10 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         ready_within=BOUND_SECONDS,
     ):
         await publisher.publish("a")
+        await until(handled_count(1))
+        # The reply to the PING sent for the first read now precedes "b" on the connection.
         await publisher.publish("b")
-        await until(handled_both)
+        await until(handled_count(2))
 
     assert handled == [Wake("a"), Wake("b")]
 
