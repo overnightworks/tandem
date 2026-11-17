@@ -106,6 +106,10 @@ async def train_on_gpu(job: Job) -> None:
 [docs/reference.md](docs/reference.md) lists every public name, the Redis layout, the log events and the
 duties a host takes on: what its client carries, what it fences and what it re-derives after a Redis restart.
 
+A host's tests wake without Redis through `tandem.testing`, which is for tests only: `FakeWakeBus().pod()`
+returns a channel with `publish` and `following` as `WakeChannel` has them, and tandem's own tests hold it
+to the same cells as the real one.
+
 ## Fleet standard: cross-pod coordination in Redis
 
 Covers what pods share through Redis: waking one another across pods, deadlines kept in Redis, leases
