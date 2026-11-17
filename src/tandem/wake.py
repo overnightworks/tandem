@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
 
@@ -143,7 +143,7 @@ class WakeChannel:
         on_failed: Callable[[Exception], None],
     ) -> None:
         try:
-            # aclosing awaits the end of `_received`, with its unsubscribe, before a failure is handled.
+            # aclosing awaits the unsubscribe of `_received` before a handler failure is handled.
             async with aclosing(self._received()) as events:
                 async for event in events:
                     if isinstance(event, _Resubscribed):
@@ -172,7 +172,7 @@ class WakeChannel:
                 {"message": "on_failed of the wake following raised", "exception": handler_error}
             )
 
-    async def _received(self) -> AsyncIterator[Wake | _Resubscribed]:
+    async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled."""
         backoff = BACKOFF_FIRST_SECONDS
         failed_attempts = 0

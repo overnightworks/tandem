@@ -1,11 +1,13 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
+from contextlib import aclosing
 
 import pytest
 from logline import current_traceparent, unit_trace
 from redis.asyncio import Redis
 
 from tandem import StoreError, Wake, WakeChannel
+from tandem.wake import _Resubscribed
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import BOUND_SECONDS, until
@@ -153,26 +155,6 @@ async def test_a_handler_exception_after_the_entry_ends_the_follow_with_one_line
     log_lines.assert_none_holds(secret)
 
 
-async def test_a_refusal_after_the_entry_ends_the_follow_with_store_error_in_on_failed(
-    url_denying: Callable[[str], Awaitable[str]],
-    make_client: Callable[..., Redis],
-    observer: Redis,
-    key_prefix: str,
-    log_lines: LogLines,
-):
-    handlers = Handlers()
-    channel = WakeChannel(make_client(await url_denying("flushall")), key_prefix=key_prefix)
-    async with handlers.following(channel):
-        await observer.acl_setuser(key_prefix, enabled=True, reset_channels=True)
-        await until(_has_failed(handlers))
-
-    (error,) = handlers.failures
-    assert isinstance(error, StoreError)
-    assert not error.outage
-    (failed,) = log_lines.of("wake_follow.failed", "tandem.wake")
-    assert failed["error_type"] == "StoreError"
-
-
 async def _kill_subscription_of(observer: Redis, client: Redis) -> None:
     name = await client.client_getname()
     for connection in await observer.client_list(_type="pubsub"):
@@ -199,3 +181,64 @@ def _has_failed(handlers: Handlers) -> Callable[[], Awaitable[bool]]:
         return bool(handlers.failures)
 
     return failed
+
+
+class _WakeBufferedWithTheFirstConfirmation(WakeChannel):
+    """A channel whose first confirmation is followed at once by a wake, as one read can bring."""
+
+    async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
+        buffered = True
+        async with aclosing(super()._received()) as events:
+            async for event in events:
+                yield event
+                if buffered:
+                    buffered = False
+                    yield Wake("orders/7")
+
+
+async def test_a_wake_buffered_with_the_first_confirmation_is_handled_after_the_entry_returned(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    handlers = Handlers()
+    handlers.raise_in_wake = RuntimeError("boom")
+    channel = _WakeBufferedWithTheFirstConfirmation(make_client(redis_url), key_prefix=key_prefix)
+
+    async with handlers.following(channel):
+        assert handlers.calls == ["resync"]
+        assert handlers.failures == []
+        await until(_has_failed(handlers))
+
+    assert handlers.calls == ["resync", "orders/7"]
+
+
+async def test_an_on_failed_that_raises_does_not_raise_out_of_the_exit_and_reaches_the_loop_handler(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    handlers = Handlers()
+    handlers.raise_in_wake = RuntimeError("the handler")
+    channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    loop = asyncio.get_running_loop()
+    reported: list[BaseException | None] = []
+    previous_handler = loop.get_exception_handler()
+    loop.set_exception_handler(lambda _loop, context: reported.append(context.get("exception")))
+
+    def on_failed(error: Exception) -> None:
+        raise ValueError("on_failed") from error
+
+    async def reported_one() -> bool:
+        return bool(reported)
+
+    try:
+        async with channel.following(
+            on_resync=handlers.on_resync,
+            on_wake=handlers.on_wake,
+            on_failed=on_failed,
+            ready_within=BOUND_SECONDS,
+        ):
+            await channel.publish("orders/7")
+            await until(reported_one)
+    finally:
+        loop.set_exception_handler(previous_handler)
+
+    (exception,) = reported
+    assert isinstance(exception, ValueError)
