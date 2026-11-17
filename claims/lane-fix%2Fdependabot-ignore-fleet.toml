@@ -1,7 +1,0 @@
-claim_id = "2ae340a0fff443578ae22f65aac12be7"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "c423f8c220a9a1cf5dba8b2d93eca3a907841551"
-branch = "fix/dependabot-ignore-fleet"
-scope = [".github/dependabot.yml"]
-opened_commit = "ff65ec0878def1660293dbf3a414d7c15900cf85"
