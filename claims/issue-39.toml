@@ -1,0 +1,8 @@
+claim_id = "8dfd3baa250d40e78138dbc2ca65281c"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "9d35d5d6af60e1656c5ecec73dce1834e4ceceb5"
+branch = "claude/issue-39-tandem-follows-the-wake-channel"
+scope = ["README.md", "docs/ARCHITECTURE.md", "src/tandem/__init__.py", "src/tandem/wake.py", "tests"]
+opened_commit = "2d016630465460fca5524b7e6292938d7eacfb30"
+whole_reason = "One new method on the wake owner with its tests and the documents that describe the duties it absorbs."
