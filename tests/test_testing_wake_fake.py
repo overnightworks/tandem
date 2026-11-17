@@ -6,6 +6,16 @@ from tandem.testing import FakeWakeBus, FakeWakeChannel
 from tests.support.waiting import BOUND, until
 
 
+async def withheld_following_entered(channel: FakeWakeChannel) -> None:
+    async with channel.following(
+        on_resync=lambda: None,
+        on_wake=lambda wake: None,
+        on_failed=lambda error: None,
+        ready_within=BOUND,
+    ):
+        pass
+
+
 async def test_a_following_that_was_withheld_its_confirmation_enters_once_resync_confirms():
     channel = FakeWakeBus().pod()
     channel.withhold_confirmation()
@@ -65,32 +75,16 @@ async def test_a_wake_published_while_the_confirmation_is_withheld_is_lost_befor
 async def test_a_following_after_the_resync_of_a_withheld_confirmation_is_confirmed_at_once():
     channel = FakeWakeBus().pod()
     channel.withhold_confirmation()
-
-    async def withheld_following_entered() -> bool:
-        async with channel.following(
-            on_resync=lambda: None,
-            on_wake=lambda wake: None,
-            on_failed=lambda error: None,
-            ready_within=BOUND,
-        ):
-            return True
-
-    withheld = asyncio.create_task(withheld_following_entered())
+    withheld = asyncio.create_task(withheld_following_entered(channel))
 
     async def confirmed() -> bool:
         channel.resync()
         return withheld.done()
 
     await until(confirmed)
-    assert await withheld
+    await withheld
 
-    async with channel.following(
-        on_resync=lambda: None,
-        on_wake=lambda wake: None,
-        on_failed=lambda error: None,
-        ready_within=BOUND,
-    ):
-        pass
+    await withheld_following_entered(channel)
 
 
 async def test_a_channel_constructed_on_a_bus_hears_every_wake_once():
