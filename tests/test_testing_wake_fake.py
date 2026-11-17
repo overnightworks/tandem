@@ -1,19 +1,39 @@
 """The controls of `FakeWakeChannel` that no real Redis cell has a counterpart for."""
 
 import asyncio
+from collections.abc import Callable, Coroutine
+from typing import Any
 
+from tandem import Wake
 from tandem.testing import FakeWakeBus, FakeWakeChannel
 from tests.support.waiting import BOUND, until
 
 
-async def withheld_following_entered(channel: FakeWakeChannel) -> None:
+async def enter_and_leave(
+    channel: FakeWakeChannel,
+    on_resync: Callable[[], None] = lambda: None,
+    on_wake: Callable[[Wake], None] = lambda wake: None,
+) -> None:
     async with channel.following(
-        on_resync=lambda: None,
-        on_wake=lambda wake: None,
+        on_resync=on_resync,
+        on_wake=on_wake,
         on_failed=lambda error: None,
         ready_within=BOUND,
     ):
         pass
+
+
+async def entered_after_resyncs(
+    channel: FakeWakeChannel, following: Coroutine[Any, Any, None]
+) -> None:
+    entering = asyncio.create_task(following)
+
+    async def entered() -> bool:
+        channel.resync()  # a resync before the subscription exists reaches nothing
+        return entering.done()
+
+    await until(entered)
+    await entering
 
 
 async def test_a_following_that_was_withheld_its_confirmation_enters_once_resync_confirms():
@@ -21,24 +41,10 @@ async def test_a_following_that_was_withheld_its_confirmation_enters_once_resync
     channel.withhold_confirmation()
     resyncs: list[str] = []
 
-    async def enter_and_leave() -> None:
-        async with channel.following(
-            on_resync=lambda: resyncs.append("resync"),
-            on_wake=lambda wake: None,
-            on_failed=lambda error: None,
-            ready_within=BOUND,
-        ):
-            pass
+    await entered_after_resyncs(
+        channel, enter_and_leave(channel, on_resync=lambda: resyncs.append("resync"))
+    )
 
-    entering = asyncio.create_task(enter_and_leave())
-
-    async def entered() -> bool:
-        channel.resync()  # a resync before the subscription exists reaches nothing
-        return entering.done()
-
-    await until(entered)
-
-    await entering
     assert resyncs
 
 
@@ -48,16 +54,13 @@ async def test_a_wake_published_while_the_confirmation_is_withheld_is_lost_befor
     channel.withhold_confirmation()
     calls: list[str] = []
 
-    async def enter_and_leave() -> None:
-        async with channel.following(
+    entering = asyncio.create_task(
+        enter_and_leave(
+            channel,
             on_resync=lambda: calls.append("resync"),
             on_wake=lambda wake: calls.append("wake"),
-            on_failed=lambda error: None,
-            ready_within=BOUND,
-        ):
-            pass
-
-    entering = asyncio.create_task(enter_and_leave())
+        )
+    )
 
     async def entered() -> bool:
         if calls:
@@ -75,16 +78,10 @@ async def test_a_wake_published_while_the_confirmation_is_withheld_is_lost_befor
 async def test_a_following_after_the_resync_of_a_withheld_confirmation_is_confirmed_at_once():
     channel = FakeWakeBus().pod()
     channel.withhold_confirmation()
-    withheld = asyncio.create_task(withheld_following_entered(channel))
 
-    async def confirmed() -> bool:
-        channel.resync()
-        return withheld.done()
+    await entered_after_resyncs(channel, enter_and_leave(channel))
 
-    await until(confirmed)
-    await withheld
-
-    await withheld_following_entered(channel)
+    await enter_and_leave(channel)
 
 
 async def test_a_channel_constructed_on_a_bus_hears_every_wake_once():
