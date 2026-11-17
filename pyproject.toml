@@ -15,7 +15,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "overnightworks-logline>=0.3.0,<0.7",
+    "overnightworks-logline>=0.3.0,<0.8",
     "redis>=5.3,<9",
 ]
 
@@ -80,7 +80,7 @@ include = [
 pythonVersion = "3.14"
 
 [tool.uv.sources]
-overnightworks-logline = { git = "https://github.com/overnightworks/logline", tag = "v0.6.0", group = "dev" }
+overnightworks-logline = { git = "https://github.com/overnightworks/logline", tag = "v0.7.0", group = "dev" }
 
 [tool.uv]
 cache-keys = [{ file = "pyproject.toml" }, { file = "src/tandem/__init__.py" }]
