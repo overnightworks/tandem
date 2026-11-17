@@ -3,5 +3,5 @@ agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
 role = "builder"
 base = "700c8074e31d2a812e25e91282e17ad68746c193"
 branch = "claude/issue-54-logline-08"
-scope = ["pyproject.toml", "uv.lock"]
+scope = ["README.md", "pyproject.toml", "uv.lock"]
 opened_commit = "7763f64058d074b32ca6a112125c22abf25bcacb"
