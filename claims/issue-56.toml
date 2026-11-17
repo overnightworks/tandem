@@ -1,0 +1,8 @@
+claim_id = "364384bd211f4dada917dd5f4cc737e2"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "925cba2c980ef694fdc09b2ee982f6e1d04178c8"
+branch = "claude/issue-56-drop-claimer"
+scope = ["README.md", "docs/reference.md", "src/tandem/deadlines.py", "src/tandem/leases.py", "tests"]
+opened_commit = "794d1277a8beaa3a779ebc535cb33e1f14a18f6d"
+whole_reason = "One unused argument removed from two signatures, with the docs and test call sites that pass it."
