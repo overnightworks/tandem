@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import re
+from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator, AsyncIterator, Callable
 from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -42,56 +43,13 @@ class _Resubscribed:
     """Redis acknowledged the subscription (again): re-read everything this pod serves."""
 
 
-class WakeChannel:
-    def __init__(self, redis: Client, *, key_prefix: str) -> None:
-        self._redis = redis
-        self._channel = wake_channel(key_prefix)
+class _Following(ABC):
+    """What `following` means, over any source of confirmations and wakes: the real channel's
+    subscription and the in-memory fake of `tandem.testing` share it, so the two cannot differ.
+    """
 
-    async def publish(self, address: str) -> None:
-        """Send one PUBLISH of `address` with the caller's current trace.
-
-        A failure means the delivery is uncertain; it is not resent.
-        """
-        async with StepTimer("wake_publication.ended", logger):
-            await self._publish(address, current_traceparent())
-
-    async def _publish(self, address: str, traceparent: str | None) -> None:
-        # The client's own execute_command would run the PUBLISH under the client's Retry, which can
-        # send it again after a lost reply; the connection is driven directly instead.
-        redis = self._redis
-        try:
-            await redis.initialize()
-            if (own := redis.connection) is not None:
-                # A single-connection client keeps the pool's connection and serializes its own
-                # commands on this lock. redis-py offers no public way to take it without running
-                # the command through its Retry, so this relies on the private attribute, as the
-                # client's own execute_command does; a rename in redis-py fails loud below.
-                try:
-                    lock = redis._single_conn_lock
-                except AttributeError as error:
-                    raise RuntimeError(
-                        "tandem publishes over a single-connection client through redis-py's "
-                        "Redis._single_conn_lock, which this redis-py version does not have"
-                    ) from error
-                async with lock:
-                    await self._send_publish(own, address, traceparent)
-            else:
-                pool = redis.connection_pool
-                connection = await pool.get_connection()
-                try:
-                    await self._send_publish(connection, address, traceparent)
-                finally:
-                    await pool.release(connection)
-        except redis_errors.RedisError as error:
-            raise store_error(f"publish to {self._channel}", error) from error
-
-    async def _send_publish(
-        self, connection: AbstractConnection, address: str, traceparent: str | None
-    ) -> None:
-        trace = connection.encoder.encode(traceparent or "")
-        payload = b"%d:%b%b" % (len(trace), trace, connection.encoder.encode(address))
-        await connection.send_command("PUBLISH", self._channel, payload)
-        await connection.read_response()
+    def __init__(self, channel: str) -> None:
+        self._channel = channel
 
     @asynccontextmanager
     async def following(
@@ -166,8 +124,63 @@ class WakeChannel:
             logger.error("wake_follow.failed", extra={"error_type": type(error).__name__})
             on_failed(error)
 
-    async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
+    @abstractmethod
+    def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled."""
+
+
+class WakeChannel(_Following):
+    def __init__(self, redis: Client, *, key_prefix: str) -> None:
+        super().__init__(wake_channel(key_prefix))
+        self._redis = redis
+
+    async def publish(self, address: str) -> None:
+        """Send one PUBLISH of `address` with the caller's current trace.
+
+        A failure means the delivery is uncertain; it is not resent.
+        """
+        async with StepTimer("wake_publication.ended", logger):
+            await self._publish(address, current_traceparent())
+
+    async def _publish(self, address: str, traceparent: str | None) -> None:
+        # The client's own execute_command would run the PUBLISH under the client's Retry, which can
+        # send it again after a lost reply; the connection is driven directly instead.
+        redis = self._redis
+        try:
+            await redis.initialize()
+            if (own := redis.connection) is not None:
+                # A single-connection client keeps the pool's connection and serializes its own
+                # commands on this lock. redis-py offers no public way to take it without running
+                # the command through its Retry, so this relies on the private attribute, as the
+                # client's own execute_command does; a rename in redis-py fails loud below.
+                try:
+                    lock = redis._single_conn_lock
+                except AttributeError as error:
+                    raise RuntimeError(
+                        "tandem publishes over a single-connection client through redis-py's "
+                        "Redis._single_conn_lock, which this redis-py version does not have"
+                    ) from error
+                async with lock:
+                    await self._send_publish(own, address, traceparent)
+            else:
+                pool = redis.connection_pool
+                connection = await pool.get_connection()
+                try:
+                    await self._send_publish(connection, address, traceparent)
+                finally:
+                    await pool.release(connection)
+        except redis_errors.RedisError as error:
+            raise store_error(f"publish to {self._channel}", error) from error
+
+    async def _send_publish(
+        self, connection: AbstractConnection, address: str, traceparent: str | None
+    ) -> None:
+        trace = connection.encoder.encode(traceparent or "")
+        payload = b"%d:%b%b" % (len(trace), trace, connection.encoder.encode(address))
+        await connection.send_command("PUBLISH", self._channel, payload)
+        await connection.read_response()
+
+    async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
         backoff = BACKOFF_FIRST_SECONDS
         failed_attempts = 0
         while True:

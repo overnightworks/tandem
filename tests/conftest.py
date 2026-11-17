@@ -21,6 +21,7 @@ from tests.support.backoffs import Backoffs
 from tests.support.locks import FAMILY
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
+from tests.support.wake_backends import FakeBackend, RedisBackend, RedisFixtures, WakeBackend
 
 
 def _required_url(variable: str) -> str:
@@ -49,6 +50,24 @@ def log_lines(monkeypatch: pytest.MonkeyPatch) -> Iterator[LogLines]:
     monkeypatch.setenv("LOG_LEVEL", "debug")
     with configured("tandem-tests"):
         yield LogLines(stdout)
+
+
+@pytest.fixture(params=["redis", "fake"])
+def wake(request: pytest.FixtureRequest) -> WakeBackend:
+    """The same following cell against a real Redis and against `tandem.testing`'s fake, which
+    needs no Redis."""
+    if request.param == "fake":
+        return FakeBackend()
+    return RedisBackend(
+        RedisFixtures(
+            redis_url=request.getfixturevalue("redis_url"),
+            key_prefix=request.getfixturevalue("key_prefix"),
+            make_client=request.getfixturevalue("make_client"),
+            observer=request.getfixturevalue("observer"),
+            proxy=request.getfixturevalue("proxy"),
+            url_denying=request.getfixturevalue("url_denying"),
+        )
+    )
 
 
 @pytest.fixture
