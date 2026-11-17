@@ -66,10 +66,11 @@ async def test_entry_raises_an_outage_when_the_subscription_is_not_confirmed_in_
     channel = WakeChannel(make_client(proxy.url), key_prefix=key_prefix)
     proxy.cut()
     tasks_before = asyncio.all_tasks()
+    following = handlers.following(channel, ready_within=0.2)
 
     with pytest.raises(StoreError) as raised:
-        async with handlers.following(channel, ready_within=0.2):
-            pytest.fail("the entry returned without a confirmed subscription")
+        async with following:
+            pass
 
     assert raised.value.outage
     assert handlers.calls == []
@@ -83,9 +84,11 @@ async def test_a_handler_exception_before_the_entry_returns_raises_out_of_the_en
     handlers.raise_in_resync = RuntimeError("boom")
     channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
 
+    following = handlers.following(channel)
+
     with pytest.raises(RuntimeError, match="boom"):
-        async with handlers.following(channel):
-            pytest.fail("the entry returned although on_resync raised")
+        async with following:
+            pass
 
     assert handlers.failures == []
 
