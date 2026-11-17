@@ -11,7 +11,7 @@ flowchart LR
         hostA["Host code"] -- "publish(address)" --> tandemA["tandem<br/>WakeChannel"]
     end
     subgraph podB["Pod B of the host app"]
-        tandemB["tandem<br/>WakeChannel"] -- "Wake, Resubscribed" --> hostB["Host code"]
+        tandemB["tandem<br/>WakeChannel"] -- "on_resync, on_wake" --> hostB["Host code"]
     end
     tandemA -- "PUBLISH" --> redis[("Redis<br/>one channel per key prefix")]
     redis -- "message, subscribe confirmation" --> tandemB
@@ -26,9 +26,10 @@ tandem, whose tag the host pins.
 
 Module owners in `tandem`:
 
-- `wake` owns `WakeChannel`, `Wake` and `Resubscribed`: the `PUBLISH`, the frame of a wake's payload, the
-  dedicated pub/sub connection of each `received()`, the translation of Redis's messages into events and the
-  back-off loop around them.
+- `wake` owns `WakeChannel` and `Wake`: the `PUBLISH`, the frame of a wake's payload, the dedicated pub/sub
+  connection of each `following`, the translation of Redis's messages into events, the back-off loop around
+  them and what a host would otherwise write around that loop: readiness, the bounded start, the serialised
+  handling, the sender's trace and the split of a failure before and after the entry.
 - `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
   generates in Python because Lua's random is not fit.
 - `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end,
@@ -64,15 +65,16 @@ Anything that is the name of a Redis key or channel is built in `keys`.
 ```mermaid
 sequenceDiagram
     participant H as Host
-    participant W as received()
+    participant W as following()
     participant R as Redis
-    H->>W: async for
+    H->>W: async with, ready_within
     W->>R: SUBSCRIBE channel
     R-->>W: subscribe confirmation
-    W-->>H: Resubscribed
+    W-->>H: on_resync()
     Note over H: re-read everything
+    W-->>H: the entry returns
     R-->>W: message
-    W-->>H: Wake(address)
+    W-->>H: on_wake(Wake) in the sender's trace
     R--xW: connection lost
     alt inside the client's retry budget
         W->>R: redis-py reconnects and subscribes again
@@ -81,7 +83,7 @@ sequenceDiagram
         W->>R: SUBSCRIBE channel on a fresh connection
     end
     R-->>W: subscribe confirmation
-    W-->>H: Resubscribed
+    W-->>H: on_resync()
 ```
 
 A deadline is in one of three places, and every arrow is one Lua script on Redis `TIME`:
@@ -148,13 +150,15 @@ publish and subscribe. The channel carries addresses, never contents: whoever ca
 pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an out-of-memory refusal)
 surfaces as `StoreError`.
 
-**Failure.** Every failure of Redis, in `publish`, `received()`, `Deadlines`, `Leases`, `Locks` and `Script`, is a `StoreError`
-that says whether it was an outage or a refusal; `received()` and `serve_lapses` ride out an outage and end
+**Failure.** Every failure of Redis, in `publish`, `following`, `Deadlines`, `Leases`, `Locks` and `Script`, is a `StoreError`
+that says whether it was an outage or a refusal; `following` and `serve_lapses` ride out an outage and end
 on a refusal; `kept` raises a refusal only at its first renewal, and a later failed renewal, outage or refusal,
 is logged as a warning and retried at the next `every`;
 `publish` says nothing of whether the wake arrived.
-`received()` survives every connection failure and ends only on cancellation or a refusal;
-a payload that is no valid UTF-8 or no frame is skipped and logged by length.
+`following` survives every connection failure and ends only on leaving the context, a refusal or a handler
+exception. Before the entry returns that raises out of the entry; after it the following ends, writes one
+`wake_follow.failed` line with the error type only and calls `on_failed` once, and leaving the context then
+raises only an exception of `on_failed`, the host's own error. A payload that is no valid UTF-8 or no frame is skipped and logged by length.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event, its fields in `extra=`, and logline's `StepTimer`
@@ -173,9 +177,9 @@ dependency floors run the same tests.
 
 ## 6. Constraints and reasons
 
-- Each `received()` opens one pub/sub connection of its own from the host's client: a subscribed connection
+- Each `following` opens one pub/sub connection of its own from the host's client: a subscribed connection
   cannot run other commands, and two readers must not share a subscription's lifetime.
-- `Resubscribed` is yielded for every `subscribe` confirmation Redis sends, including the one redis-py's own
+- `on_resync` is called for every `subscribe` confirmation Redis sends, including the one redis-py's own
   re-subscription triggers inside the client's retry budget. The two redis-py versions CI runs, the locked one
   and the lowest the range allows, deliver that confirmation through `get_message`, so tandem never copies
   the host's client settings and never changes the host's pool or `Retry`.
@@ -189,8 +193,10 @@ dependency floors run the same tests.
   operation-duration and error-count metrics.
 - The prefix is one segment checked at construction: a prefix with `:` would make the segments of a channel name
   ambiguous, and a wrong value must fail where it is written.
-- On cancellation `received()` unsubscribes and closes its connection, so a cancelled reader leaves no
-  subscriber and no connection behind.
+- On leaving the context `following` cancels and awaits its reader, which unsubscribes and closes its
+  connection, so a left following leaves no subscriber, no connection and no task behind.
+- The handlers are synchronous: the one-at-a-time, in-order handling the host needs follows from the single
+  reader task, and a handler that awaited would hold every later wake behind it.
 
 - Every deadline transition is one Lua script that reads `TIME`, so no pod clock is involved and a transition
   cannot interleave with another. Redis does not roll a script back: a script that fails after a write keeps
@@ -202,11 +208,11 @@ dependency floors run the same tests.
   and the address's bytes, with no end marker. A length cannot be confused by the address, which is everything
   after the traceparent, so any address survives byte for byte, `12:orders` and a colon included; a length of
   0 is a wake with no trace. `WakeChannel.publish` frames the caller's `current_traceparent()` and the Lua
-  `tandem.wake` frames its optional third argument, so both write the same bytes. `received()` reads a
+  `tandem.wake` frames its optional third argument, so both write the same bytes. The reader reads a
   length of 1 to 9 digits that fits the payload and whose two parts are UTF-8; anything else is skipped as
   `malformed_frame`. The traceparent reaches the host as received and is validated by logline's `unit_trace`,
-  not by tandem. `received()` sets no trace itself: a context set across its `yield` would leak into the
-  host's loop, so the host wraps its handling in `unit_trace`.
+  not by tandem. `following` calls `on_wake` inside `unit_trace(wake.traceparent)` on its own reader task,
+  so the trace ends with the call and never leaks into the host's loop.
 - The channel's version segment is a contract between pods of different releases: v1 and v2 pods do not
   hear each other, so a host restarts all its pods at once when it crosses the change.
 - The generation of a lease is 128 random bits from `secrets`, compared by equality, not ordered: it needs
@@ -242,7 +248,7 @@ dependency floors run the same tests.
 ## 7. Not chosen
 
 - Redis Streams: they keep history and need consumer groups, offsets and trimming; a re-read at
-  `Resubscribed` already restores any state a lost wake described.
+  `on_resync` already restores any state a lost wake described.
 - One channel per address: the number of channels grows with the data and every reconnect must resubscribe
   them all.
 - A heartbeat of tandem's: a silent half-open connection stays undetected until the system reports it. It
@@ -256,8 +262,8 @@ dependency floors run the same tests.
 - A family without `serve_lapses` keeps its lapse queue until the next restart; a lapse whose handler always
   raises returns every `claim_for`.
 - Redis pub/sub is at most once: a wake published while a pod's subscription is down is lost, and only the
-  host's re-read at `Resubscribed` and its handling of a failed `publish` bring the pods back in line.
-- `received()` blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies
+  host's re-read at `on_resync` and its handling of a failed `publish` bring the pods back in line.
+- The reader blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies
   without closing is noticed late.
-- A `Resubscribed` and a wake reach the host in Redis's order, but a host that handles events concurrently
-  can re-read out of order; the host serialises its handling.
+- `on_resync` and `on_wake` run one at a time in Redis's order, so a slow synchronous handler holds every
+  later wake and a long first re-read delays the entry's return.

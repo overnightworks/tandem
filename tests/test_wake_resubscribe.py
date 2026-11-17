@@ -34,11 +34,11 @@ async def test_a_killed_subscription_is_resubscribed_once_and_wakes_continue(
     channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         (connection_id,) = await _reader_connection_ids(observer, key_prefix)
         await observer.client_kill_filter(_id=str(connection_id))
 
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish("next")
 
         assert await reader.next_wake() == Wake("next")
@@ -57,7 +57,7 @@ async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
     )
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         # A pooled connection makes the plain command fail inside the Retry; redis-py 5.x does not
         # retry a handshake that fails on a fresh connection.
         await client.ping()
@@ -67,7 +67,7 @@ async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
         proxy.restore()
 
         assert await within(plain_command) is True
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish("next")
         assert await reader.next_wake() == Wake("next")
         assert reader.drain() == []
@@ -88,13 +88,13 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=backoffs)
     async with Reader(channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         proxy.cut()
         await backoffs.reached(6)
         assert reader.running
         proxy.restore()
 
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish("next")
         assert await reader.next_wake() == Wake("next")
         assert reader.drain() == []
@@ -126,17 +126,17 @@ async def test_a_redis_restart_is_resubscribed_once_and_wakes_continue(
     client = make_client(restartable_redis_url)
     channel = WakeChannel(client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         with contextlib.suppress(RedisConnectionError):
             await client.execute_command("SHUTDOWN", "NOSAVE")
 
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await channel.publish("later")
         assert await reader.next_wake() == Wake("later")
         assert reader.drain() == []
 
 
-async def test_state_changed_while_disconnected_is_read_again_at_the_next_resubscribed(
+async def test_state_changed_while_disconnected_is_read_again_at_the_next_resynced(
     proxy: TcpProxy,
     make_client: Callable[..., Redis],
     key_prefix: str,
@@ -148,7 +148,7 @@ async def test_state_changed_while_disconnected_is_read_again_at_the_next_resubs
     channel = WakeChannel(reader_client, key_prefix=key_prefix)
     host = ScenarioHost(writer_client, key_prefix)
     async with Reader(channel) as reader:
-        await host.handle(await reader.next_resubscribed())
+        await host.handle(await reader.next_resynced())
         proxy.cut()
         await proxy.attempts_reached(1)
         await host.commit("orders/7", "shipped")
@@ -156,7 +156,7 @@ async def test_state_changed_while_disconnected_is_read_again_at_the_next_resubs
         assert host.served == {}
         proxy.restore()
 
-        await host.handle(await reader.next_resubscribed())
+        await host.handle(await reader.next_resynced())
 
         assert host.served == {"orders/7": "shipped"}
         assert reader.drain() == []
@@ -184,7 +184,7 @@ async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str,
         readers = [await start("read") for _ in range(2)]
         for process in readers:
             assert process.stdout is not None
-            assert (await within(process.stdout.readline())).strip() == b"RESUBSCRIBED"
+            assert (await within(process.stdout.readline())).strip() == b"RESYNCED"
         writer = await start("write", "shared")
         await within(writer.wait())
         for process in readers:

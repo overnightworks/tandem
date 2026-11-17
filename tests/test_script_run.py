@@ -25,7 +25,7 @@ async def test_a_script_writes_a_deadline_and_a_wake_that_are_visible_together(
     client = make_client(redis_url)
     deadlines = new_deadlines(client)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         reached = await Script(client, _DEADLINE_AND_WAKE).run(
             key_names(deadlines), ["room-1", 60_000, wake_channel(key_prefix), "room-1"]
@@ -56,7 +56,7 @@ async def test_a_script_wakes_with_the_trace_it_is_given_or_none(
     if traceparent is not None:
         arguments.append(traceparent)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         reached = await script.run([], arguments)
 
@@ -73,7 +73,7 @@ async def test_a_script_that_fails_before_its_first_write_leaves_neither_deadlin
     client = make_client(redis_url)
     deadlines = new_deadlines(client)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         script = Script(client, _DEADLINE_AND_WAKE)
         names = key_names(deadlines)

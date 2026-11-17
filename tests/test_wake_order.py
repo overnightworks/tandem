@@ -7,11 +7,11 @@ from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
 
-from tandem import Resubscribed, Wake
+from tandem import Wake
 from tests.support.backoffs import BackoffRecordingChannel, Backoffs
 from tests.support.numbered_publisher import NumberedPublisher
 from tests.support.proxy import TcpProxy
-from tests.support.reader import Reader
+from tests.support.reader import Reader, Resynced
 from tests.support.waiting import BOUND_SECONDS, until, within
 
 REPLACEMENT_MESSAGES = 20
@@ -71,7 +71,7 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
         reader_client, key_prefix=key_prefix, backoffs=backoffs
     )
     async with Reader(reader_channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         (channel,) = await observer.pubsub_channels(f"{key_prefix}*")
         publisher = NumberedPublisher(make_client(redis_url), str(channel))
         publisher.start()
@@ -89,15 +89,15 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
         assert replacement, "the publisher saw no receiver after the run of zero"
         yielded = await _read_until(reader, Wake(str(replacement[-1])))
 
-    resubscribed = [index for index, event in enumerate(yielded) if isinstance(event, Resubscribed)]
+    resubscribed = [index for index, event in enumerate(yielded) if isinstance(event, Resynced)]
     assert len(resubscribed) == 1
     wakes = [int(event.address) for event in yielded if isinstance(event, Wake)]
     assert yielded[resubscribed[0] + 1 :] == [Wake(str(number)) for number in replacement]
     assert publisher.numbers_with_no_receiver().isdisjoint(wakes)
 
 
-async def _read_until(reader: Reader, last: Wake) -> list[Wake | Resubscribed]:
-    yielded: list[Wake | Resubscribed] = []
+async def _read_until(reader: Reader, last: Wake) -> list[Wake | Resynced]:
+    yielded: list[Wake | Resynced] = []
     async with asyncio.timeout(BOUND_SECONDS):
         while last not in yielded:
             yielded.append(await reader.next())
