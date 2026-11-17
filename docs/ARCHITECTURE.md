@@ -3,7 +3,8 @@
 ## 1. Context and Scope
 
 tandem runs inside each pod of a host app, with no server or storage of its own; its one neighbour is the
-Redis the host already uses, whose clock (`TIME`) stamps every deadline and lease. Host developers start at the [README](../README.md).
+Redis the host already uses, whose clock (`TIME`) stamps every deadline and lease. Host developers start at
+the [README](../README.md) and the [reference](reference.md).
 
 ```mermaid
 flowchart LR
@@ -18,47 +19,29 @@ flowchart LR
 ```
 
 Outside: the host, which owns its state, its Redis client (pool, retry, timeouts) and what an address means,
-and Redis, which keeps no wake. tandem imports only `redis` and `logline`; an import contract keeps test
-tools out of it. logline is the fleet's logger, a second runtime dependency: a version range by name in
-tandem, whose tag the host pins.
+and Redis, which keeps no wake. tandem imports only `redis` and `logline` (the fleet's logger: a version
+range by name in tandem, whose tag the host pins); an import contract keeps test tools out of it.
 
 ## 2. Building Block View
 
 Module owners in `tandem`:
 
-- `wake` owns `WakeChannel` and `Wake`: the `PUBLISH`, the frame of a wake's payload, the dedicated pub/sub
-  connection of each `following`, the translation of Redis's messages into events, the back-off loop around
-  them and what a host would otherwise write around that loop: readiness, the bounded start, the serialised
-  handling, the sender's trace and the split of a failure before and after the entry.
-- `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens, which it
-  generates in Python because Lua's random is not fit.
-- `leases` owns `Leases`, `Liveness`, `LeaseState`, `Renewal`, `Lapse`, `Roster` and `Hold`: the renew, end,
-  state, live and sweep scripts and the loops of `kept` and `serve_lapses`. Its log lines are described under
-  Crosscutting Concepts. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of `Deadlines`
-  over any three keys), so a lapse is claimed, extended and finished by the same scripts as a deadline.
-- `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations,
-  which it generates in Python. It shares the app's epoch and `Liveness` with `leases`, and has no lapse
-  queue.
-- `lua` owns `LUA_KIT`: the one implementation of each transition that `Deadlines`, `Leases` and `Locks` and a
-  host's script run (`now_ms`, `epoch_settled`, `deadline_set`, `deadline_cancel`, `deadline_state`,
-  `lock_state`, `wake`).
-- `script` owns `Script`: it prepends `LUA_KIT`, runs by SHA and reloads on `NOSCRIPT`.
-- `client` owns the exported `Client` type.
-- `keys` owns the names tandem gives in Redis: the check of a key prefix and a kind, the wake channel and the
-  `DeadlineKeys` of a kind, the app's epoch key, the `LeaseKeys` of a family and the `LockKeys` of a
-  family.
-- `testing` owns `settle_epoch`: the one helper for a host's tests, which ages the app's epoch through
-  `keys`. It imports nothing beyond `redis` and `tandem`; `tandem.__all__` lists `testing`, which makes it
-  public.
-- `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage
-  (a lost connection or a timeout) or a refusal, and the back-off both loops use.
-- `tests/support` owns the test tools: a TCP proxy that cuts, holds and black-holes the way to Redis, a
-  reader that steps through events, and a minimal host.
-
-`wake` and `script` use `client` and `errors` (`wake`, `leases` and `locks` also use `logline`); `deadlines`
-uses `script` and `keys`; `leases` uses `deadlines`, `script`, `keys` and `errors`; `locks` uses `deadlines`
-(its span checks), `leases` (`Liveness`), `script` and `keys`; `script` uses `lua`; `testing` uses `keys`.
-Anything that is the name of a Redis key or channel is built in `keys`.
+- `wake` owns `WakeChannel` and `Wake`: the `PUBLISH`, the frame of a payload, the pub/sub connection of each
+  `following`, the back-off loop around it and what a host would otherwise write around that loop:
+  readiness, the bounded start, the serialised handling, the sender's trace and the split of a failure before
+  and after the entry.
+- `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens.
+- `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts and the loops of
+  `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of
+  `Deadlines` over any three keys), so a lapse is claimed, extended and finished like a deadline.
+- `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations.
+  It shares the app's epoch and `Liveness` with `leases` and has no lapse queue.
+- `lua` owns `LUA_KIT`, the one implementation of each transition that the classes and a host's script run;
+  `script` owns `Script`, which prepends it, runs by SHA and reloads on `NOSCRIPT`; `client` owns `Client`.
+- `keys` owns every name tandem gives in Redis and the check of a key prefix and a kind.
+- `testing` owns `settle_epoch`, the one helper for a host's tests; `__all__` lists it, so it is public.
+- `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage or
+  a refusal, and the back-off both loops use.
 
 ## 3. Runtime View
 
@@ -70,8 +53,7 @@ sequenceDiagram
     H->>W: async with, ready_within
     W->>R: SUBSCRIBE channel
     R-->>W: subscribe confirmation
-    W-->>H: on_resync()
-    Note over H: re-read everything
+    W-->>H: on_resync(), the host re-reads everything
     W-->>H: the entry returns
     R-->>W: message
     W-->>H: on_wake(Wake) in the sender's trace
@@ -86,7 +68,7 @@ sequenceDiagram
     W-->>H: on_resync()
 ```
 
-A deadline is in one of three places, and every arrow is one Lua script on Redis `TIME`:
+A deadline is in one of three places; every arrow is one Lua script on Redis `TIME`:
 
 ```mermaid
 stateDiagram-v2
@@ -101,13 +83,12 @@ stateDiagram-v2
     Claimed --> [*]: cancel (token void)
 ```
 
-Per kind there are three structures: a due ZSET scored by the due time in ms on `TIME`, a claimed ZSET scored
-by the claim's expiry and a HASH from key to the current token. Because the HASH holds one token per key, a
-claim is valid exactly while its token is the current one, so `set`, `cancel` and a takeover void the old
-claim by replacing or deleting that token, in the same script that moves the key.
+Per kind there are a due ZSET scored by the due time in ms, a claimed ZSET scored by the claim's expiry and
+a HASH from key to the current token. A claim is valid exactly while its token is the current one, so `set`,
+`cancel` and a takeover void the old claim in the script that moves the key.
 
-A lease is in the expiry ZSET while it lives; its generation is in a HASH. Every lease script starts by
-reading `TIME`, setting the epoch when absent and reading the lease state, so these are one snapshot:
+A lease is in the expiry ZSET while it lives and its generation is in a HASH. Every lease script reads
+`TIME`, sets the epoch when absent and reads the lease state, so these are one snapshot:
 
 ```mermaid
 stateDiagram-v2
@@ -119,13 +100,11 @@ stateDiagram-v2
     Lapse --> [*]: done
 ```
 
-`state` reads the expiry ZSET and, for a live lease, its generation, and writes only the epoch: a lapse in
-any state is GONE (or UNKNOWN until `lasts` have passed since the epoch, which the first lease command after
-a Redis restart creates).
+`state` writes only the epoch: a lapse in any state is GONE, or UNKNOWN until `lasts` have passed since
+the epoch.
 
-A lock is one ZSET member scored by its expiry and one HASH field holding its generation. Every lock
-script starts with `tandem.lock_state`, which reads `TIME`, sets the epoch when absent and reads the lock,
-so a host's admit script that calls it takes the same snapshot:
+A lock is one ZSET member scored by its expiry and one HASH field holding its generation; every lock
+script starts with `tandem.lock_state`, so a host's admit script that calls it takes the same snapshot:
 
 ```mermaid
 stateDiagram-v2
@@ -135,135 +114,87 @@ stateDiagram-v2
     Held --> [*]: expiry passed
 ```
 
-An absent lock reads free only once `lasts` have passed since the epoch; before that it is unknown, so
-`acquire` returns None and `lock_state` refuses.
+An absent lock reads free only once `lasts` have passed since the epoch; before that `acquire` returns None.
 
 ## 4. Deployment View
 
-A library in the host's environment. The host installs it by a pinned git tag and builds a `WakeChannel` on
-the Redis client it already has; there is nothing of tandem to deploy or run.
+A library in the host's environment, installed by a pinned git tag; nothing of tandem is deployed or run.
 
 ## 5. Crosscutting Concepts
 
 **Trust.** The host, its Redis and the other pods of the app are trusted; Redis's own ACL decides who may
 publish and subscribe. The channel carries addresses, never contents: whoever can publish can make every
-pod re-read, and nothing more. A Redis that refuses a command (an ACL denial, an out-of-memory refusal)
-surfaces as `StoreError`.
+pod re-read, and nothing more.
 
-**Failure.** Every failure of Redis, in `publish`, `following`, `Deadlines`, `Leases`, `Locks` and `Script`, is a `StoreError`
-that says whether it was an outage or a refusal; `following` and `serve_lapses` ride out an outage and end
-on a refusal; `kept` raises a refusal only at its first renewal, and a later failed renewal, outage or refusal,
-is logged as a warning and retried at the next `every`;
-`publish` says nothing of whether the wake arrived.
-`following` survives every connection failure and ends only on leaving the context, a refusal or a handler
-exception. Before the entry returns that raises out of the entry; after it the following ends, writes one
-`wake_follow.failed` line with the error type only and calls `on_failed` once, and leaving the context then
-raises only an exception of `on_failed`, the host's own error. A payload that is no valid UTF-8 or no frame is skipped and logged by length.
+**Failure.** Every failure of Redis is a `StoreError` that says whether it was an outage or a refusal;
+`following` and `serve_lapses` ride out an outage and end on a refusal, and `publish` says nothing of
+whether the wake arrived. The [reference](reference.md) says how a failure reaches the host.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
-`tandem.<module>`: a literal `<noun>.<verb_past>` event, its fields in `extra=`, and logline's `StepTimer`
-for each call the host awaits. A lapse handler and a `serve_lapses` round write their own lines, because
-their levels and traceback do not fit the timer. tandem never calls `configure` or structlog: the host owns
-the process's logging, and a host without logline's `configure` keeps its handlers. The log never carries a
-generation, a lapse's key, a payload or a `StoreError`'s text: the generation is a value that can end a lease.
-Each lapse handling runs in its own trace (`unit_trace`), so its lines and the host handler's lines share a
-`trace_id`. The README lists the events; they are public.
+`tandem.<module>`: a literal `<noun>.<verb_past>` event with its fields in `extra=`. logline's `StepTimer`
+times `publish`, each lease call and each lock call; `Deadlines` and `Script.run` write no line. A lapse
+handler and a `serve_lapses` round write their own lines, because their levels and traceback do not fit the
+timer. tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
+generation, a value that can end a lease. Each lapse handling runs in its own trace (`unit_trace`), so its
+lines and the host handler's share a `trace_id`. The [reference](reference.md#what-tandem-logs) lists the
+events; they are public.
 
-**Proof strategy.** The tests run every cell against a real Redis in a throwaway container started by
-`scripts/run_redis_tests.sh`; the cells that need an outage go through a small TCP proxy, and the cells of
-the plain flow also run on fakeredis. Waits are barriers and bounded waits, never sleeps; a stimulus that is
-time itself waits on the loop clock. Branch coverage is 100 %, measured over all tests. The lowest direct
-dependency floors run the same tests.
+**Proof strategy.** The tests run every cell against a real Redis, and the cells of the plain flow also run
+on fakeredis; the lowest direct dependency floors run the same tests. Branch coverage is 100 %, measured over
+all tests. `AGENTS.md` names the commands and the rules for waits and outages.
 
 ## 6. Constraints and reasons
 
 - Each `following` opens one pub/sub connection of its own from the host's client: a subscribed connection
-  cannot run other commands, and two readers must not share a subscription's lifetime.
+  cannot run other commands. On leaving the context it cancels and awaits its reader, which unsubscribes and
+  closes the connection.
 - `on_resync` is called for every `subscribe` confirmation Redis sends, including the one redis-py's own
-  re-subscription triggers inside the client's retry budget. The two redis-py versions CI runs, the locked one
-  and the lowest the range allows, deliver that confirmation through `get_message`, so tandem never copies
-  the host's client settings and never changes the host's pool or `Retry`.
-- `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
-  wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
-  borrows a connection from the host's pool and sends the one command itself. The host client's `Retry` still
-  governs the connecting and health check before the command, because the pool's connections carry it and
-  tandem does not change them; no `PUBLISH` has been sent at that point, so it cannot duplicate a wake. With an
-  unreachable Redis `publish` therefore blocks for about the `Retry`'s total plus each attempt's connect
-  timeout. Because it bypasses the client's `execute_command`, a `publish` is absent from redis-py's
-  operation-duration and error-count metrics.
-- The prefix is one segment checked at construction: a prefix with `:` would make the segments of a channel name
-  ambiguous, and a wrong value must fail where it is written.
-- On leaving the context `following` cancels and awaits its reader, which unsubscribes and closes its
-  connection, so a left following leaves no subscriber, no connection and no task behind.
-- The handlers are synchronous: the one-at-a-time, in-order handling the host needs follows from the single
-  reader task, and a handler that awaited would hold every later wake behind it.
-
-- Every deadline transition is one Lua script that reads `TIME`, so no pod clock is involved and a transition
-  cannot interleave with another. Redis does not roll a script back: a script that fails after a write keeps
-  the write, so a script checks before it writes.
-- A deadline key is a ZSET member and a HASH field, never a key segment, so a free-form key cannot reach a
-  fixed key. The segment after `v1` is one of the fixed tokens `epoch`, `d`, `l` and `lock`, the wake channel
-  is `<prefix>:tandem:v2:wake`, and a caller's `kind` appears only after `d:` and before a fixed suffix.
-- The wake payload is one frame: the decimal byte length of the traceparent, a colon, the traceparent's bytes
-  and the address's bytes, with no end marker. A length cannot be confused by the address, which is everything
-  after the traceparent, so any address survives byte for byte, `12:orders` and a colon included; a length of
-  0 is a wake with no trace. `WakeChannel.publish` frames the caller's `current_traceparent()` and the Lua
-  `tandem.wake` frames its optional third argument, so both write the same bytes. The reader reads a
-  length of 1 to 9 digits that fits the payload and whose two parts are UTF-8; anything else is skipped as
-  `malformed_frame`. The traceparent reaches the host as received and is validated by logline's `unit_trace`,
-  not by tandem. `following` calls `on_wake` inside `unit_trace(wake.traceparent)` on its own reader task,
-  so the trace ends with the call and never leaks into the host's loop.
-- The channel's version segment is a contract between pods of different releases: v1 and v2 pods do not
-  hear each other, so a host restarts all its pods at once when it crosses the change.
-- The generation of a lease is 128 random bits from `secrets`, compared by equality, not ordered: it needs
-  no counter that a Redis restart would reset. Its collision bound is accepted. The epoch is created by
-  `SET NX` inside every lease script, so UNKNOWN ends at most `lasts` after the first lease command after a
-  restart, with no separate initialisation and no race between pods.
-- A lock is not a lease: `Leases.renew` extends a live lease for any caller, so a single-flight lock built on
-  it would be held for ever by the losers that keep polling. `acquire` starts only when none is held and
-  `extend` needs the generation. The hold has the lease's storage layout and epoch, not its keys.
+  re-subscription triggers inside the client's retry budget; both redis-py versions CI runs deliver it through
+  `get_message`, so tandem never changes the host's client settings, pool or `Retry`.
+- `publish` is one `PUBLISH` that is never retried or queued: a queued wake would outlive the state it
+  describes, and a retry cannot tell a lost request from a lost reply. It sends the one command itself on a
+  pooled connection, so a `publish` is absent from redis-py's operation metrics; the [reference](reference.md)
+  says what the client's `Retry` still governs.
+- The wake payload is a frame that carries the sender's traceparent beside the address. The handlers are
+  synchronous and `following` runs them on its one reader task, in `unit_trace`, so handling is one at a time
+  in Redis's order and a trace ends with its call. The channel's version segment is a contract between pods
+  of different releases; the [reference](reference.md#redis-layout-and-retries) states the frame and what a
+  change costs a host.
+- Every transition of a deadline, lease or lock is one Lua script that reads `TIME`, so no pod clock is
+  involved and a transition cannot interleave with another.
+- A deadline key or lock name is a ZSET member and a HASH field, never a key segment, so a free-form value
+  cannot reach a fixed key. The segment after `v1` is one of the fixed tokens `epoch`, `d`, `l` and `lock`, and
+  a caller's `kind` or `family` appears only after its token and before a fixed suffix.
+- Generations and claim tokens are 128 random bits from `secrets`, generated in Python because Lua's random is
+  not fit, compared by equality and never ordered, so no counter is needed that a Redis restart would reset;
+  the collision bound is accepted.
+- The epoch is created by `SET NX` inside every lease and lock script, so UNKNOWN ends at most `lasts` after
+  the first command after a restart, with no separate initialisation and no race between pods. The grace
+  works only when the epoch is lost together with the leases and locks it guards: a Redis that forgets some
+  keys and keeps the epoch (an eviction, a partial restore) reads a lost lock as free, and two holders can
+  then be live together. The guarantee holds on a Redis that forgets all or nothing: one instance, never a
+  replica (it can lag behind the epoch or the locks) and never a partial snapshot.
+- A lock is not a lease: `Leases.renew` extends a live lease for any caller, so a lock built on it would be
+  held for ever by the losers that keep polling; `extend` needs the generation.
 - `tandem.lock_state` returns nil for a free lock, so `if tandem.lock_state(...) then` fails closed: a held
-  lock and an unsettled epoch both refuse. A host that reserves with `acquire` and then re-reads its own
-  state is safe against an admit that reads the lock and writes its state in one script: either the admit
-  sees the lock and refuses, or its write is visible to the re-read, and the reserve releases.
-- A lock has no forced release: only its generation ends it early, and a crashed holder's lock runs out
-  after `lasts`. A replayed `acquire` carries the generation it started under and returns it; a replayed
-  `release` that succeeded answers False.
-- Each `acquire` removes a small batch of expired entries, so the structures of names that nobody acquires
-  again shrink without a sweeper.
-- A lapse leaves the expiry ZSET for the lapse queue in the script that notices it (a renew, an end or the
-  sweep), so a claim on a lapse never touches the expiry that decides ALIVE.
-- `serve_lapses` claims small batches and extends every pending claim of the batch, so the claims of a mass
-  lapse do not run out while earlier handlers run.
-- Tokens are 128 random bits from `secrets`, generated in Python and passed as arguments, since Lua's random
-  is not fit for them. Each claim gets a fresh one.
-- Scripts run through the host's client, so its `Retry` can run one again after a lost reply. A replay is
-  harmless only while nothing else touched the key in between: `set` replaces the due time and invalidates
-  any claim, and `cancel` removes whatever the key currently is, and neither tells a replay from a new
-  operation. A retried `cancel` can therefore delete a deadline another pod armed after the first `cancel`
-  ran, and a retried `set` can overwrite a newer due time or invalidate a newer claim. `extend` repeats
-  harmlessly, since it needs the token. A claim whose reply is lost expires and is claimed again, which
-  keeps "at least once"; a repeated `done` answers False although the first finished.
+  lock and an unsettled epoch both refuse, in one atomic step with the host's write.
+- A lapse leaves the expiry ZSET for the lapse queue in the script that notices it, so a claim on a lapse
+  never touches the expiry that decides ALIVE. `serve_lapses` extends every pending claim of its batch, so the
+  claims of a mass lapse do not run out while earlier handlers run.
+- Scripts run through the host's client, so its `Retry` can replay one after a lost reply; the
+  [reference](reference.md#redis-layout-and-retries) says what a replay does.
 
 ## 7. Not chosen
 
 - Redis Streams: they keep history and need consumer groups, offsets and trimming; a re-read at
   `on_resync` already restores any state a lost wake described.
-- One channel per address: the number of channels grows with the data and every reconnect must resubscribe
-  them all.
-- A heartbeat of tandem's: a silent half-open connection stays undetected until the system reports it. It
-  reopens if a host meets one in operation.
+- One channel per address: the channels grow with the data and every reconnect resubscribes them all.
+- A heartbeat of tandem's: it reopens if a host meets a silent half-open connection in operation.
 
 ## 8. Risks and Technical Debt
 
-- A Redis restart takes every deadline, lease, lapse, claim and lock with it; the host's reconcile pass sets
-  them again, and an absent lease or lock reads UNKNOWN for `lasts`, so the first `acquire` of an app that
-  has no epoch yet returns None for `lasts` as well.
-- A family without `serve_lapses` keeps its lapse queue until the next restart; a lapse whose handler always
-  raises returns every `claim_for`.
-- Redis pub/sub is at most once: a wake published while a pod's subscription is down is lost, and only the
-  host's re-read at `on_resync` and its handling of a failed `publish` bring the pods back in line.
+- Redis pub/sub is at most once: a wake published while a subscription is down is lost, and only the host's
+  re-read at `on_resync` and its handling of a failed `publish` bring the pods back in line.
 - The reader blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies
-  without closing is noticed late.
-- `on_resync` and `on_wake` run one at a time in Redis's order, so a slow synchronous handler holds every
-  later wake and a long first re-read delays the entry's return.
+  without closing is noticed late. `on_resync` and `on_wake` run one at a time in Redis's order, so a slow
+  synchronous handler holds every later wake and a long first re-read delays the entry's return.
