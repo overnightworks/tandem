@@ -53,7 +53,10 @@ target-version = "py314"
 line-length = 100
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP"]
+select = ["E", "F", "W", "I", "B", "UP", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"logline.configure".msg = "tandem never configures logging; the host does (AGENTS.md, Rules)."
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

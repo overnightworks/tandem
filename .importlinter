@@ -17,3 +17,11 @@ forbidden_modules =
     pytest_asyncio
     pytest_cov
     xdist
+
+[importlinter:contract:tandem-imports-no-structlog]
+name = tandem imports no structlog
+type = forbidden
+source_modules =
+    tandem
+forbidden_modules =
+    structlog
