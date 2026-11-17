@@ -63,6 +63,8 @@ class FakeWakeChannel(_Following):
     async def publish(self, address: str) -> None:
         """Deliver `address`, with the caller's current trace, to every pod that follows."""
         self._bus._broadcast(Wake(address, current_traceparent()))
+        # A publish yields to the loop, so a following has heard the wake when it returns.
+        await asyncio.sleep(0)
 
     def resync(self) -> None:
         """Confirm the subscription of every following of this pod again, as a reconnect does.

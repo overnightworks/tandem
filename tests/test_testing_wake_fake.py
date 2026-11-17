@@ -87,6 +87,21 @@ async def test_a_following_after_the_resync_of_a_withheld_confirmation_is_confir
     await withheld_following_entered(channel)
 
 
+async def test_a_wake_is_heard_by_a_following_when_its_publish_returns():
+    bus = FakeWakeBus()
+    channel = bus.pod()
+    addresses: list[str] = []
+
+    async with channel.following(
+        on_resync=lambda: None,
+        on_wake=lambda wake: addresses.append(wake.address),
+        on_failed=lambda error: None,
+        ready_within=BOUND,
+    ):
+        await channel.publish("heard")
+        assert addresses == ["heard"]
+
+
 async def test_a_channel_constructed_on_a_bus_hears_every_wake_once():
     bus = FakeWakeBus()
     channel = FakeWakeChannel(bus)
