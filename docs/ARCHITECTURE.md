@@ -39,7 +39,10 @@ Module owners in `tandem`:
 - `lua` owns `LUA_KIT`, the one implementation of each transition that the classes and a host's script run;
   `script` owns `Script`, which prepends it, runs by SHA and reloads on `NOSCRIPT`; `client` owns `Client`.
 - `keys` owns every name tandem gives in Redis and the check of a key prefix and a kind.
-- `testing` owns `settle_epoch`, the one helper for a host's tests; `__all__` lists it, so it is public.
+- `testing` owns `settle_epoch` and the in-memory wake channel (`FakeWakeBus`, `FakeWakeChannel`), the helpers
+  for a host's tests; `__all__` lists the module, so they are public. The fake extends `wake`'s one base of
+  `following`, so a host's tests run the real handler dispatch, and the `following` cells run against it and
+  against Redis alike, so a drift fails tandem's CI.
 - `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage or
   a refusal, and the back-off both loops use.
 
@@ -140,8 +143,8 @@ lines and the host handler's share a `trace_id`. The [reference](reference.md#wh
 events; they are public.
 
 **Proof strategy.** The tests run every cell against a real Redis, and the cells of the plain flow also run
-on fakeredis; the lowest direct dependency floors run the same tests. Branch coverage is 100 %, measured over
-all tests. `AGENTS.md` names the commands and the rules for waits and outages.
+on fakeredis, the `following` cells also on the in-memory wake channel of `tandem.testing`; the lowest direct
+dependency floors run the same tests. Branch coverage is 100 %, measured over all tests. `AGENTS.md` names the commands and the rules for waits and outages.
 
 ## 6. Constraints and reasons
 

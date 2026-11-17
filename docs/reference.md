@@ -56,6 +56,8 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `DeadlineKeys` | The record `deadlines.keys` returns. |
 | `StoreError` | Redis refused or timed out; the cause is chained. |
 | `tandem.testing.settle_epoch(redis, *, key_prefix)` | Test-only helper for a host's tests (`await`, with a `redis.asyncio.Redis`): sets the app's epoch so far in the past that every lease and lock family of `key_prefix` reads settled at once, with no knowledge of tandem's key layout. Production code that settles the epoch breaks the restart grace: after a Redis restart it reads GONE or free for what Redis lost, where it must read UNKNOWN until `lasts` have passed. |
+| `tandem.testing.FakeWakeBus()` | Test-only: the pods of one app in one test, without Redis. `bus.pod()` returns the `FakeWakeChannel` of one more pod; what any pod publishes reaches every pod that follows, the publisher's own included. |
+| `FakeWakeChannel` | Test-only: a pod's `publish(address)` and `following(*, on_resync, on_wake, on_failed, ready_within)` with the behaviour of `WakeChannel`'s (same code for `following`: the first confirmation, `ready_within`, the split of a failure before and after entry, the sender's trace, the order and the exit), proven by the same cells against real Redis. It logs no `wake_publication.ended`. It has no outage to ride out; the controls make it lose what Redis would. `resync()` confirms the following again, as a reconnect does; `withhold_confirmation()` leaves a following unconfirmed until `resync()`, so its entry raises `StoreError(outage=True)` after `ready_within`; `refuse()` ends every following with a refusal `StoreError`, and the next entry raises it. Production code must not use it. |
 
 ## Redis layout and retries
 
