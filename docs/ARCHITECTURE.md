@@ -44,6 +44,8 @@ Module owners in `tandem`:
   or a refusal, and the back-off both loops use.
 - `tests/support` owns the test tools: a TCP proxy that cuts the way to Redis, a stepping reader, a minimal host.
 
+## 3. Runtime View
+
 ```mermaid
 sequenceDiagram
     participant H as Host
@@ -139,6 +141,10 @@ generation, a value that can end a lease.
 Each lapse handling runs in its own trace (`unit_trace`), so its lines and the host handler's lines share a
 `trace_id`. The [reference](reference.md#what-tandem-logs) lists the events; they are public.
 
+**Proof strategy.** The tests run every cell against a real Redis, and the cells of the plain flow also run
+on fakeredis; the lowest direct dependency floors run the same tests. Branch coverage is 100 %, measured over
+all tests. `AGENTS.md` names the commands and the rules for waits and outages.
+
 ## 6. Constraints and reasons
 
 - Each `following` opens one pub/sub connection of its own from the host's client: a subscribed connection
@@ -147,19 +153,18 @@ Each lapse handling runs in its own trace (`unit_trace`), so its lines and the h
 - `on_resync` is called for every `subscribe` confirmation Redis sends, including the one redis-py's own
   re-subscription triggers inside the client's retry budget; both redis-py versions CI runs deliver it
   through `get_message`, so tandem never copies the host's client settings or changes its pool or `Retry`.
-- `publish` is one `PUBLISH` with no retry or queue, neither tandem's nor the host client's `Retry`: a queued
-  wake would outlive the state it describes, and a retry cannot tell a lost request from a lost reply. It
-  sends the one command itself on a pooled connection, so the client's `Retry` governs only the connecting
-  before it, and a `publish` is absent from redis-py's operation metrics.
-- The wake payload is a frame that carries the sender's traceparent beside the address and keeps any address
-  byte for byte ([reference](reference.md#redis-layout-and-retries)). The handlers are synchronous and
+- `publish` is one `PUBLISH` that is never retried or queued: a queued wake would outlive the state it
+  describes, and a retry cannot tell a lost request from a lost reply. It sends the one command itself on a
+  pooled connection, so a `publish` is absent from redis-py's operation metrics; the [reference](reference.md)
+  says what the client's `Retry` still governs.
+- The wake payload is a frame that carries the sender's traceparent beside the address
+  ([reference](reference.md#redis-layout-and-retries)). The handlers are synchronous and
   `following` runs them on its one reader task, in `unit_trace`, so handling is one at a time in Redis's
   order and a trace ends with its call.
-- The channel's version segment is a contract between pods of different releases: pods on different segments
-  do not hear each other, so a host restarts all its pods at once when it crosses a change.
+- The channel's version segment is a contract between pods of different releases, as the
+  [reference](reference.md#redis-layout-and-retries) states with what it costs a host.
 - Every transition of a deadline, lease or lock is one Lua script that reads `TIME`, so no pod clock is
-  involved and a transition cannot interleave with another. Redis does not roll a script back: a script that
-  fails after a write keeps the write, so a script checks before it writes.
+  involved and a transition cannot interleave with another.
 - A deadline key or lock name is a ZSET member and a HASH field, never a key segment, so a free-form value
   cannot reach a fixed key. The segment after `v1` is one of the fixed tokens `epoch`, `d`, `l` and `lock`, and
   a caller's `kind` or `family` appears only after its token and before a fixed suffix.
@@ -170,7 +175,8 @@ Each lapse handling runs in its own trace (`unit_trace`), so its lines and the h
   the first command after a restart, with no separate initialisation and no race between pods. The grace
   works only when the epoch is lost together with the leases and locks it guards: a Redis that forgets some
   keys and keeps the epoch (an eviction, a partial restore) reads a lost lock as free, and two holders can
-  then be live together. The guarantee therefore holds on a Redis that forgets all or nothing.
+  then be live together. The guarantee therefore holds on a Redis that forgets all or nothing: one instance, never a replica, which
+  can lag behind the epoch or the locks it follows, and never a partial snapshot.
 - A lock is not a lease: `Leases.renew` extends a live lease for any caller, so a lock built on it would be
   held for ever by the losers that keep polling. `acquire` starts only when none is held and `extend` needs
   the generation.
@@ -180,9 +186,8 @@ Each lapse handling runs in its own trace (`unit_trace`), so its lines and the h
 - A lapse leaves the expiry ZSET for the lapse queue in the script that notices it, so a claim on a lapse
   never touches the expiry that decides ALIVE. `serve_lapses` extends every pending claim of its batch, so the
   claims of a mass lapse do not run out while earlier handlers run.
-- Scripts run through the host's client, so its `Retry` can run one again after a lost reply; `set` and
-  `cancel` cannot tell a replay from a new operation, as the [reference](reference.md#redis-layout-and-retries)
-  states.
+- Scripts run through the host's client, so its `Retry` can run one again after a lost reply; what a replay
+  does is in the [reference](reference.md#redis-layout-and-retries).
 
 ## 7. Not chosen
 

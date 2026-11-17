@@ -20,7 +20,7 @@ an agent cannot derive from the code.
 
 ## Who uses it today
 
-The operator and the agents that build and run his apps: agents, skat, songmaker and hopin pin it.
+The operator and the agents that build and run his apps: every app of his that pins tandem in its manifest.
 
 ## Deliberate non-goals
 
