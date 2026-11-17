@@ -1,8 +1,0 @@
-claim_id = "2df4d2bca0724267ac7bb5b934669f9d"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "8a68d8e3ee632f8f84c6ef589bf0b3bba825dcca"
-branch = "claude/issue-46-testing-wake-fake"
-scope = ["README.md", "docs", "src/tandem/__init__.py", "src/tandem/testing.py", "src/tandem/wake.py", "tests"]
-opened_commit = "4c1edee97cf7c451741961f73324ba8bff6372a5"
-whole_reason = "One test-only fake with the shared contract cells that prove it and the reference rows that describe it."
