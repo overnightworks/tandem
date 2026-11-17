@@ -4,9 +4,11 @@ from collections.abc import Callable
 import pytest
 from logline import current_traceparent, unit_trace
 from redis.asyncio import Redis
+from redis.asyncio.client import PubSub
 
 from tandem import StoreError, Wake, WakeChannel, checked_segment
 from tandem.keys import wake_channel
+from tandem.wake import _Resubscribed
 from tests.support.backends import Backend
 from tests.support.logs import LogLines
 from tests.support.reader import Reader, Resynced
@@ -166,31 +168,48 @@ def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(value: str):
     WakeChannel(Redis(), key_prefix=value)
 
 
+class _IdleBeforeEveryReadAfterTheFirst(WakeChannel):
+    """A channel whose loop clock passes `idle` seconds before each read that follows the first.
+
+    redis-py sends its PING at a read that starts after the clock passed the health-check interval.
+    """
+
+    def __init__(self, redis: Redis, *, key_prefix: str, idle: float) -> None:
+        super().__init__(redis, key_prefix=key_prefix)
+        self._idle = idle
+        self._reads = 0
+
+    async def _next_event(self, pubsub: PubSub) -> Wake | _Resubscribed:
+        if self._reads:
+            clock = asyncio.get_running_loop()
+            idle_until = clock.time() + self._idle
+
+            async def idle_has_passed() -> bool:
+                return clock.time() > idle_until
+
+            await until(idle_has_passed)
+        self._reads += 1
+        return await super()._next_event(pubsub)
+
+
 async def test_a_client_that_checks_its_connection_health_still_yields_only_wakes(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
     interval = 0.05
-    channel = WakeChannel(
-        make_client(redis_url, health_check_interval=interval), key_prefix=key_prefix
+    channel = _IdleBeforeEveryReadAfterTheFirst(
+        make_client(redis_url, health_check_interval=interval),
+        key_prefix=key_prefix,
+        idle=2 * interval,
     )
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
-    clock = asyncio.get_running_loop()
     handled: list[Wake] = []
-
-    def hold_the_loop_past_the_interval(wake: Wake) -> None:
-        # redis-py sends its PING at the next read once the loop clock passes the interval; a
-        # synchronous handler is the one place where the reader is not inside a read.
-        handled.append(wake)
-        health_check_falls_due = clock.time() + interval
-        while clock.time() <= health_check_falls_due:
-            pass
 
     async def handled_both() -> bool:
         return len(handled) == 2
 
     async with channel.following(
         on_resync=lambda: None,
-        on_wake=hold_the_loop_past_the_interval,
+        on_wake=handled.append,
         on_failed=lambda error: pytest.fail(f"the following failed: {error!r}"),
         ready_within=BOUND_SECONDS,
     ):
