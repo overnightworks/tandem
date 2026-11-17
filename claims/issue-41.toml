@@ -1,0 +1,8 @@
+claim_id = "8bf9bc7a1bbb41ba8192bcd2119849c0"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "62fbcc8ce7430cceffee73a5df2bc32f760e57ee"
+branch = "claude/issue-41-documents-state-today"
+scope = ["README.md", "docs"]
+opened_commit = "efd11caca0e79431839c3786b428d53b5f77b83c"
+whole_reason = "One pass over the three documents and the reference the budget moves their detail into; no code changes."
