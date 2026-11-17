@@ -1,0 +1,8 @@
+claim_id = "5f0f19c0ff5c4c63949686592af4e508"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "24aa2ccca4e096c695261eb973535fac818c83c0"
+branch = "claude/issue-40-checks-key-literal-and-import"
+scope = [".importlinter", "pyproject.toml", "scripts"]
+opened_commit = "9003ddde864d243f35b05b2b7b0b3e4b5454ffd0"
+whole_reason = "Two static rules wired into the one static-check script, each in the tool that owns its kind of rule."
