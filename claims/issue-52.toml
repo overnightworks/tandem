@@ -1,8 +1,0 @@
-claim_id = "e33e8fb46797431fac7a66d06a4dde1d"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "700c8074e31d2a812e25e91282e17ad68746c193"
-branch = "claude/issue-52-fake-publish-controls"
-scope = ["docs/reference.md", "src/tandem/__init__.py", "src/tandem/testing.py", "tests"]
-opened_commit = "abfd7a1f9bde68fcd0f43dd34ff921918eb28081"
-whole_reason = "Two test-only publish controls on the fake with their tests, reference rows and the version."
