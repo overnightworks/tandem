@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import aclosing, asynccontextmanager, suppress
 from dataclasses import dataclass
 
 from logline import StepTimer, current_traceparent, unit_trace
@@ -110,13 +110,15 @@ class WakeChannel:
 
         A refusal or a handler exception before entry returns is raised out of the entry. After it,
         either ends the following: one `wake_follow.failed` line carries the error type and
-        `on_failed(error)` is called once. Leaving the context cancels the following, closes the
-        subscription and raises nothing of its own.
+        `on_failed(error)` is called once; an exception of `on_failed` goes to the event loop's
+        exception handler. Leaving the context cancels the following, closes the subscription and
+        raises nothing of its own.
 
         A payload that is no valid UTF-8 or no frame is logged and skipped.
         """
         ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
-        follower = asyncio.create_task(self._follow(ready, on_resync, on_wake, on_failed))
+        entered = asyncio.Event()
+        follower = asyncio.create_task(self._follow(ready, entered, on_resync, on_wake, on_failed))
         try:
             confirmed, _ = await asyncio.wait({ready}, timeout=ready_within)
             if not confirmed:
@@ -125,6 +127,7 @@ class WakeChannel:
                     outage=True,
                 )
             ready.result()  # raises what stopped the following before it was ready
+            entered.set()
             yield
         finally:
             follower.cancel()
@@ -134,25 +137,40 @@ class WakeChannel:
     async def _follow(
         self,
         ready: asyncio.Future[None],
+        entered: asyncio.Event,
         on_resync: Callable[[], None],
         on_wake: Callable[[Wake], None],
         on_failed: Callable[[Exception], None],
     ) -> None:
         try:
-            async for event in self._received():
-                if isinstance(event, _Resubscribed):
-                    on_resync()
-                    if not ready.done():
-                        ready.set_result(None)
-                else:
-                    with unit_trace(event.traceparent):
-                        on_wake(event)
+            # aclosing awaits the end of `_received`, with its unsubscribe, before a failure is handled.
+            async with aclosing(self._received()) as events:
+                async for event in events:
+                    if isinstance(event, _Resubscribed):
+                        on_resync()
+                        if not ready.done():
+                            ready.set_result(None)
+                            # Nothing is handled after the first resync before the entry returned.
+                            await entered.wait()
+                    else:
+                        with unit_trace(event.traceparent):
+                            on_wake(event)
         except Exception as error:
             if not ready.done():
                 ready.set_exception(error)
                 return
             logger.error("wake_follow.failed", extra={"error_type": type(error).__name__})
+            self._call_on_failed(on_failed, error)
+
+    def _call_on_failed(self, on_failed: Callable[[Exception], None], error: Exception) -> None:
+        # The context exit raises nothing of its own: a failing `on_failed` goes to the loop's
+        # exception handler, as the exception of any other callback does.
+        try:
             on_failed(error)
+        except Exception as handler_error:
+            asyncio.get_running_loop().call_exception_handler(
+                {"message": "on_failed of the wake following raised", "exception": handler_error}
+            )
 
     async def _received(self) -> AsyncIterator[Wake | _Resubscribed]:
         """Yield every confirmation of the subscription and every wake after it, until cancelled."""

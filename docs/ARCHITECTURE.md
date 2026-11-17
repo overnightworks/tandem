@@ -158,7 +158,7 @@ is logged as a warning and retried at the next `every`;
 `following` survives every connection failure and ends only on leaving the context, a refusal or a handler
 exception. Before the entry returns that raises out of the entry; after it the following ends, writes one
 `wake_follow.failed` line with the error type only and calls `on_failed` once, and leaving the context then
-raises nothing. A payload that is no valid UTF-8 or no frame is skipped and logged by length.
+raises nothing: an exception of `on_failed` goes to the event loop's exception handler. A payload that is no valid UTF-8 or no frame is skipped and logged by length.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event, its fields in `extra=`, and logline's `StepTimer`
