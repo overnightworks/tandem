@@ -32,7 +32,6 @@ because Dependabot looks the name up on PyPI. Tags are never moved; a broken rel
 ```python
 from datetime import timedelta
 
-from logline import unit_trace
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
@@ -44,13 +43,12 @@ from tandem import (
     Leases,
     Liveness,
     Locks,
-    Resubscribed,
     StoreError,
     Wake,
     WakeChannel,
 )
 
-# The Retry lets the host's own re-read at a Resubscribed survive a Redis restart (see duty 1);
+# The Retry lets the host's own re-read at a resync survive a Redis restart (see duty 1);
 # on redis-py 5.x the client also needs retry_on_error=[ConnectionError, TimeoutError] for it.
 # The timeouts let `publish` fail on a Redis that stays silent (see the publish row).
 redis = Redis.from_url(
@@ -64,13 +62,18 @@ channel = WakeChannel(redis, key_prefix="skat")
 
 
 async def follow_changes(served: Served) -> None:
-    async for event in channel.received():
-        match event:
-            case Resubscribed():
-                await served.reread_everything()
-            case Wake(address, traceparent):
-                with unit_trace(traceparent):  # the handling joins the sender's trace (see duty 15)
-                    await served.reread(address)
+    def on_wake(wake: Wake) -> None:
+        served.reread(wake.address)  # runs in the sender's trace
+
+    # Entering returns once the subscription is confirmed and the first re-read is done, so the pod
+    # may turn Ready there; with no confirmation within 10 s it raises StoreError.
+    async with channel.following(
+        on_resync=served.reread_everything,
+        on_wake=on_wake,
+        on_failed=served.stop_serving,  # called once when the following ends on its own
+        ready_within=10,
+    ):
+        await served.until_shutdown()
 
 
 async def save(served: Served, address: str, value: str) -> None:
@@ -143,9 +146,8 @@ async def train_on_gpu(job: Job) -> None:
 | `WakeChannel(redis, *, key_prefix)` | The wake channel of one app on the host's `redis.asyncio.Redis` client. `key_prefix` is one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming `key_prefix`. |
 | `checked_segment(value, *, argument)` | The check `WakeChannel` applies to `key_prefix`: it returns `value` when it is one segment matching `[a-z0-9][a-z0-9-]*` and raises `ValueError` naming `argument` otherwise. A host that derives a prefix, such as `<prefix>-agents`, validates it with this before it builds a channel. |
 | `await channel.publish(address)` | One `PUBLISH` of `address`, the name of what changed and never its content, with the caller's current traceparent (logline's `current_traceparent()`; none outside a trace). It raises `StoreError` when Redis refuses or does not answer; a Redis that stays silent fails it only when the host's client sets `socket_timeout` and `socket_connect_timeout`, which default to none, so without them `publish` waits for ever. tandem never retries or queues it, and the client's own `Retry` never resends the `PUBLISH`; it governs only the connecting and health check before it, so with an unreachable Redis `publish` can block for about the `Retry`'s total plus each attempt's connect timeout before it raises. |
-| `channel.received()` | An async iterator of `Wake` and `Resubscribed` that runs until it is cancelled. Each call opens a pub/sub connection of its own. |
-| `Wake(address, traceparent=None)` | A pod published `address` while it was in the trace `traceparent`; None when its sender had none. It is the sender's value as received: tandem validates nothing, and logline's `unit_trace` starts a new trace for a malformed one. |
-| `Resubscribed()` | Redis acknowledged the subscription, the first time and after every reconnect. |
+| `channel.following(*, on_resync, on_wake, on_failed, ready_within)` | An async context manager that follows the channel for the host on a pub/sub connection of its own. Entering returns once Redis confirmed the subscription and `on_resync()` returned; with no confirmation within `ready_within` seconds (required, no default) it raises `StoreError(outage=True)`. `on_resync()` is called at every confirmation, the first and after every reconnect: re-read everything the pod serves. `on_wake(wake)` is called for every wake inside `unit_trace(wake.traceparent)`. The handlers are synchronous and run one at a time, in the order Redis delivered. A refusal or a handler exception before entry returns is raised out of the entry. After it, either ends the following: tandem writes one `wake_follow.failed` line and calls `on_failed(error)` once. Leaving the context cancels the following and closes the subscription, and raises nothing of its own. |
+| `Wake(address, traceparent=None)` | A pod published `address` while it was in the trace `traceparent`; None when its sender had none. It is the sender's value as received: tandem validates nothing, and logline's `unit_trace`, which `following` wraps the handler in, starts a new trace for a malformed one. |
 | `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else (a `claim_for` that is no `timedelta` included) raises `ValueError` naming the argument. A deadline key is any string. |
 | `await deadlines.set(key, due_in)` | `key` comes due `due_in` after now on Redis `TIME` (a pod's clock is never read). A `key` that already waits is re-armed; a `key` that a claimer holds is re-armed too and the claim is void, so the claimer's later `done` returns False and leaves the new deadline. |
 | `await deadlines.cancel(key)` | Removes `key`, waiting or claimed, and voids its claim. True when there was something to remove. |
@@ -161,7 +163,7 @@ async def train_on_gpu(job: Job) -> None:
 | `await leases.state(holders)` | A `dict` from each holder to a `LeaseState(liveness, generation, remaining)`, read in one script that renews and starts nothing. ALIVE while its lease is live, with its `generation` and the `remaining` time; otherwise UNKNOWN until `lasts` have passed since the app's epoch, then GONE, and `generation` and `remaining` are None. The epoch is the Redis time of the first command of any pod after Redis lost its data, so a restart reads UNKNOWN, not GONE, for `lasts`; a host reconciles after the restart. A host that did not start the lease reads its generation here, for example to accept an add under the agent's current generation and later end only what that generation made on a `Lapse`. An empty collection returns `{}` without a Redis call. |
 | `await leases.live()` | A `Roster(holders, settled)`, read in one script: every live holder, and whether `lasts` have passed since the epoch. A roster that is not `settled` may miss holders that a restart took. |
 | `leases.kept(holder, *, every)` | An async context manager that renews `holder` once before the block runs, then every `every`, and ends the lease at exit. It yields a `Hold` whose `generation` follows each renewal, so a holder that lapsed and started again shows the new one. `every` is a positive `timedelta` below `lasts`, or it raises `ValueError` naming `every`. A `StoreError` of the first renewal raises out of the entry; a failed later renewal is logged and retried, never ends the block. At exit an in-flight renewal completes, then the current generation is ended, shielded from cancellation. |
-| `await leases.serve_lapses(handle, *, claimer, every)` | Runs until cancelled. Each `every` it sweeps expired leases into the lapse queue and claims the due lapses in small batches until none is due, and calls `await handle(lapse)` for each, at least once. While `handle` runs its claim is extended every `claim_for / 3`; a failed extension is logged and stops, and `handle` is never cancelled. `done` follows a `handle` that returns; one that raises is logged and its lapse returns to a claimer when its claim runs out. Each `handle` runs in a trace of its own, which ends with it. An outage of Redis is ridden out with the back-off of `received()`; a refusal raises `StoreError`. |
+| `await leases.serve_lapses(handle, *, claimer, every)` | Runs until cancelled. Each `every` it sweeps expired leases into the lapse queue and claims the due lapses in small batches until none is due, and calls `await handle(lapse)` for each, at least once. While `handle` runs its claim is extended every `claim_for / 3`; a failed extension is logged and stops, and `handle` is never cancelled. `done` follows a `handle` that returns; one that raises is logged and its lapse returns to a claimer when its claim runs out. Each `handle` runs in a trace of its own, which ends with it. An outage of Redis is ridden out with the back-off of the wake channel's following; a refusal raises `StoreError`. |
 | `Locks(redis, *, key_prefix, family, lasts)` | The locks of one `family` of one app. A lock lasts `lasts` after its latest start or extension. `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` is a positive `timedelta`; anything else raises `ValueError` naming the argument. A name is any string. |
 | `await locks.acquire(name)` | Starts the lock on `name` under a fresh random 128-bit generation and returns it, or returns None when a live lock holds `name`, the holder asking again included: a lock is not re-entrant, and `acquire` never extends one. After a Redis restart it returns None until `lasts` have passed since the app's epoch. |
 | `await locks.extend(name, generation)` | Keeps the live lock of `generation` for another `lasts` on Redis `TIME`. False, and nothing changes, for an absent, foreign or expired generation, even when nobody took the name since. |
@@ -208,15 +210,15 @@ prefixes, for example `skat` and `skat-agents`. A pod on a tandem before 0.8.0 p
 `<key_prefix>:tandem:v1:wake`, so it and a pod on 0.8.0 or later never hear each other: the host restarts
 all its pods at once when it moves to 0.8.0, and a rollback goes back for all pods at once as well.
 
-`received()` hides no reconnect. When the connection breaks, redis-py reconnects inside the retry budget of
+`following` hides no reconnect. When the connection breaks, redis-py reconnects inside the retry budget of
 the host's client, or tandem backs off (0.5 s doubling to 5 s, with no attempt limit), subscribes again and
-carries on; either way the next event is a `Resubscribed`, before any wake it covers. Only a command Redis
-refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends `received()` with
-`StoreError`. A payload that is no valid UTF-8, or no frame of tandem's, is skipped with a
+carries on; either way the next call is `on_resync`, before any wake it covers. Only a command Redis
+refuses outright, such as a subscribe the ACL denies or credentials Redis rejects, ends the following with
+`StoreError`, raised out of the entry or, once entered, handed to `on_failed`. A payload that is no valid UTF-8, or no frame of tandem's, is skipped with a
 `wake_payload.skipped` warning that names its length, never its content; the next valid wake arrives as before. A client that decodes responses
 (`decode_responses=True`) fails inside redis-py on a payload that is no valid UTF-8, so tandem subscribes
-again and a `Resubscribed` precedes the next wake; a readable payload that is no frame is skipped on the
-existing subscription, without a `Resubscribed`.
+again and an `on_resync` call precedes the next wake; a readable payload that is no frame is skipped on the
+existing subscription, without one.
 
 The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`, disjoint
 from the channel and from every other kind. `claim_for` is the same for every pod of one kind. A claim whose
@@ -244,87 +246,74 @@ handler gets an ordinary record at its own level and handler, the fields kept. t
 | `lapse_claim_extension.failed` | `tandem.leases` | warning | `reason`, `error_type`, `lease_family`, `holder_id` |
 | `lapse_claim.expired`, a claim that ran out after its extension was refused or answered false; never after an outage, whose result is unknown | `tandem.leases` | warning | `lease_family`, `holder_id` |
 | `wake_subscription.lost`, once per outage; its further attempts | `tandem.wake` | warning; debug | `reason` (`outage`), `error_type`, `failed_attempt_count` |
-| `wake_subscription.confirmed`, each `Resubscribed` | `tandem.wake` | info | `failed_attempt_count` |
+| `wake_subscription.confirmed`, each `on_resync` call | `tandem.wake` | info | `failed_attempt_count` |
+| `wake_follow.failed`, the following ended after its entry because a handler raised or Redis refused | `tandem.wake` | error | `error_type` |
 | `wake_payload.skipped` | `tandem.wake` | warning | `reason` (`invalid_utf8` or `malformed_frame`), `payload_bytes` |
 
 - `outcome` is `ok`, `failed` or `cancelled`; a failed call raises `StoreError` after its line, and a
   `False` or `None` answer is `ok`. A `kept` writes `lease_renewal.ended` for its first renewal only: its
   background renewals write a line only when one fails, and its end at the exit writes `lease_end.ended`
   like a direct `end`; when a cancellation hides a failed end, `lease_end.failed` is its one error line.
-- A refusal that reaches the host as `StoreError` out of `serve_lapses` or `received()` writes no line:
+- A refusal that reaches the host as `StoreError` out of `serve_lapses` or the entry of `following` writes no line:
   the host's layer logs it.
-- A holder is an id (see duty 14), so `holder_id` is the holder string. No line carries a generation, a lapse's
+- A holder is an id (see duty 13), so `holder_id` is the holder string. No line carries a generation, a lapse's
   key, a wake payload, a traceparent or the text of a `StoreError`.
 - A lapse is delivered at least once, so a replayed lapse writes a second `lapse_handling.ended`.
-- The wake carries its sender's traceparent: a host that handles a wake under `unit_trace(wake.traceparent)`
-  writes those lines in the sender's trace (duty 15); without it they are in the pod's own context.
+- The wake carries its sender's traceparent: `following` calls `on_wake` inside `unit_trace(wake.traceparent)`,
+  so the handler's lines are in the sender's trace.
 
 ## The host's duties
 
-Redis pub/sub delivers a wake to the readers subscribed at that moment and keeps nothing. Three duties
-close that gap, two more cover deadlines, four cover leases, four cover locks, one covers logs and one
-covers traces:
+Redis pub/sub delivers a wake to the readers subscribed at that moment and keeps nothing. `following`
+calls the host's re-read at each resync, holds the pod's start until the first one and carries each wake's trace. Two
+duties remain for the wake, two more cover deadlines, four cover leases, four cover locks and one covers logs:
 
-1. **Re-read everything the pod serves at each `Resubscribed`.** A wake sent while the pod was
-   disconnected is gone for good; the `Resubscribed` after the reconnect is the signal that anything may
-   have changed. After a Redis restart the host's own client can still hold stale pooled connections, so
-   the first command of that re-read fails with `ConnectionError` on a default `redis.asyncio` client. The
-   host's client therefore carries a `Retry`, as in the quick start, or the re-read retries itself. On
-   redis-py 5.x the client also passes `retry_on_error` with `ConnectionError` and `TimeoutError`, or its
-   `Retry` replays nothing, a lost reply included; redis-py 8 retries those two without it.
+1. **Give the client a `Retry`, so the re-read at `on_resync` survives a Redis restart.** After a restart the
+   host's own client can still hold stale pooled connections, so the first command of that re-read fails
+   with `ConnectionError` on a default `redis.asyncio` client. The host's client therefore carries a
+   `Retry`, as in the quick start, or the re-read retries itself. On redis-py 5.x the client also passes
+   `retry_on_error` with `ConnectionError` and `TimeoutError`, or its `Retry` replays nothing, a lost
+   reply included; redis-py 8 retries those two without it.
 2. **After a failed `publish`, publish again or bound the readers' staleness.** `publish` fails on a silent
    Redis only under the client's `socket_timeout`, so the host sets it. A failure means the
    delivery is uncertain: the `PUBLISH` may never have reached Redis, or Redis delivered it and only the
    reply was lost. A second `publish` of the same address only causes a duplicate wake. Alternatively every
    reader re-reads on a period, which bounds how stale it can get.
-3. **A pod turns Ready at its first `Resubscribed`.** Before it, the pod is deaf to wakes and a state it
-   served earlier may be stale.
-4. **Fence the effect of a claimed deadline with your own version.** A due key reaches a handler at least
+3. **Fence the effect of a claimed deadline with your own version.** A due key reaches a handler at least
    once and each key has at most one valid claim at a time, yet a handler that pauses past its claim runs
    beside the next claimer after a takeover. The host checks and writes its effect against a version or
    generation of its own, in one atomic step of its own store, so the older handler's effect is refused.
-5. **Reconcile the deadlines after a Redis restart.** A restart takes every pending deadline and every claim
+4. **Reconcile the deadlines after a Redis restart.** A restart takes every pending deadline and every claim
    with it. The host derives what its durable state needs (the deadlines it guards) and `set`s them again
-   at start and after it notices a restart, for example at a `Resubscribed`.
-6. **One `kept` per holder.** Several pods may renew one holder when "any of them is alive" is the
+   at start and after it notices a restart, for example at an `on_resync` call.
+5. **One `kept` per holder.** Several pods may renew one holder when "any of them is alive" is the
    intended meaning: `renew` is atomic, and the lease then cannot tell them apart. A `kept` ends the shared
    generation at its exit, so only one pod runs it.
-7. **The same `lasts` and `claim_for` for every pod of a family.** The lease and the claim are measured by
+6. **The same `lasts` and `claim_for` for every pod of a family.** The lease and the claim are measured by
    the pod that reads them; pods that differ read each other's leases and claims by their own span.
-8. **Treat a generation that differs from the stored one as the start.** A reply lost under the client's
+7. **Treat a generation that differs from the stored one as the start.** A reply lost under the client's
    `Retry` can replay `renew` as `started=False`, so a host compares the generation with the one it stored
    instead of trusting `started`. It fences its effects with that generation, checked in the same atomic
    step as the write (a generation is random and compared only by equality).
-9. **Reconcile after a Redis restart.** A restart takes every lease, lapse and claim with it: a lapse in
+8. **Reconcile after a Redis restart.** A restart takes every lease, lapse and claim with it: a lapse in
    flight is never delivered, and an absent lease reads UNKNOWN for `lasts` and then GONE. The host
    re-derives what it must free from its durable state, at its reconcile period, and reads GONE as the
    signal that nobody renews.
 
-10. **Treat a `None` from `acquire` as "not yours yet".** It answers a live holder and the `lasts` after a
+9. **Treat a `None` from `acquire` as "not yours yet".** It answers a live holder and the `lasts` after a
     Redis restart alike, so the host retries later or gives up, and never reads None as a fault.
-11. **Keep the generation and stop at the first `extend` or `release` that returns False.** The lock is
+10. **Keep the generation and stop at the first `extend` or `release` that returns False.** The lock is
     then lost or ended, and whoever kept working under it fences its effects with the generation, as in
-    duty 8. A reply lost under the client's `Retry` replays `acquire` to the same generation, and a
+    duty 7. A reply lost under the client's `Retry` replays `acquire` to the same generation, and a
     `release` that succeeded to False.
-12. **Extend before `lasts` run out, with the same `lasts` for every pod of a family.** A holder that
+11. **Extend before `lasts` run out, with the same `lasts` for every pod of a family.** A holder that
     pauses past `lasts` loses its lock to the next `acquire`. The span is measured by the pod that reads it.
-13. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`.** `locks.state`
+12. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`.** `locks.state`
     and the script that acts on it are two steps; a host that must refuse or write atomically with the
     lock calls `tandem.lock_state` inside that script. When it reserves by `acquire` and then reads its
     own state again, it releases the lock if that state says another claim came first.
-14. **A holder is an id, never a name, an e-mail address or content.** tandem writes the holder as
+13. **A holder is an id, never a name, an e-mail address or content.** tandem writes the holder as
     `holder_id` in its lines, so a holder that names a person puts that person in the log.
-15. **Handle each `Wake` inside `with unit_trace(wake.traceparent):`.** `received()` sets no trace, since a
-    context set across its `yield` would leak into the host's loop. The block starts a unit in the sender's
-    trace, or in a new one when `traceparent` is None or malformed, and ends it at the block's exit:
-
-    ```python
-    from logline import unit_trace
-
-    case Wake(address, traceparent):
-        with unit_trace(traceparent):
-            await served.reread(address)
-    ```
 
 ## Fleet standard: cross-pod coordination in Redis
 
@@ -345,9 +334,9 @@ and the ruling is recorded in this section; the process is marketplace's
 - A subscription that dies without closing, such as a half-open TCP connection, is noticed only when the
   operating system reports it: tandem sends no heartbeat of its own, and redis-py's health check does not
   fail a silent pub/sub read.
-- Delivery is at most once per subscription; duty 1 and duty 2 make the host's state converge anyway.
-- A deadline is as durable as the Redis behind it; duty 5 covers a restart.
-- A lease, its lapse and a claim are as durable as the Redis behind them; duty 9 covers a restart.
+- Delivery is at most once per subscription; the re-read at `on_resync` and duty 2 make the host's state converge anyway.
+- A deadline is as durable as the Redis behind it; duty 4 covers a restart.
+- A lease, its lapse and a claim are as durable as the Redis behind them; duty 8 covers a restart.
   The clock is Redis's: a step of it moves every expiry with it.
 - A lapse whose handler always raises returns to a claimer every `claim_for`.
 - A family without `serve_lapses` keeps its lapse queue until the next Redis restart.
