@@ -19,3 +19,5 @@ updates:
     cooldown:
       default-days: 7
     versioning-strategy: lockfile-only
+    ignore:
+      - dependency-name: "overnightworks-*"
