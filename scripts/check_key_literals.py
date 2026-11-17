@@ -4,6 +4,8 @@ Every Redis key and channel tandem names is built in `tandem.keys` from that seg
 reach keys only through KEYS[].
 """
 
+# ruff: noqa: T201 - this program's one output owner prints the offences it finds
+
 import ast
 import sys
 from pathlib import Path
