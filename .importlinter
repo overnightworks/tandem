@@ -1,5 +1,5 @@
 # Redis and logline are tandem's runtime dependencies; the test tools are dev-only and tandem imports
-# none of them. quality's CI gate checks the contract over the real import graph.
+# none of them. The contracts below run over the real import graph.
 [importlinter]
 include_external_packages = True
 root_packages =
@@ -17,3 +17,11 @@ forbidden_modules =
     pytest_asyncio
     pytest_cov
     xdist
+
+[importlinter:contract:tandem-imports-no-structlog]
+name = tandem imports no structlog
+type = forbidden
+source_modules =
+    tandem
+forbidden_modules =
+    structlog
