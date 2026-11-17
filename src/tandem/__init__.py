@@ -11,7 +11,7 @@ from tandem.lua import LUA_KIT
 from tandem.script import Script
 from tandem.wake import Wake, WakeChannel
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 __all__ = [
     "LUA_KIT",
