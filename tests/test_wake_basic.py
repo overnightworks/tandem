@@ -1,17 +1,16 @@
 import asyncio
-from collections.abc import AsyncGenerator, Callable
-from typing import cast
+from collections.abc import Callable
 
 import pytest
 from logline import current_traceparent, unit_trace
 from redis.asyncio import Redis
 
-from tandem import Resubscribed, StoreError, Wake, WakeChannel, checked_segment
+from tandem import StoreError, Wake, WakeChannel, checked_segment
 from tandem.keys import wake_channel
 from tests.support.backends import Backend
 from tests.support.logs import LogLines
-from tests.support.reader import Reader
-from tests.support.waiting import until, within
+from tests.support.reader import Reader, Resynced
+from tests.support.waiting import BOUND_SECONDS, until
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
@@ -37,7 +36,7 @@ async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend
         stop.set()
         await publishing
 
-    assert first == Resubscribed()
+    assert first == Resynced()
     assert subscribers[0][1] >= 1
     assert all(isinstance(wake, Wake) for wake in wakes)
 
@@ -49,7 +48,7 @@ async def test_a_wake_published_through_one_client_arrives_through_another(
     publisher = WakeChannel(backend.new_client(), key_prefix=key_prefix)
     subscriber = backend.new_client(decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish("orders/7")
         assert await reader.next_wake() == Wake("orders/7")
 
@@ -65,7 +64,7 @@ async def test_a_wake_arrives_with_its_address_byte_for_byte_and_no_trace_when_t
 ):
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         await publisher.publish(address)
 
@@ -84,7 +83,7 @@ async def test_a_wake_arrives_with_its_address_and_the_trace_of_its_sender(
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         with unit_trace(_INCOMING_TRACEPARENT):
             sent = current_traceparent()
@@ -112,7 +111,7 @@ async def test_a_payload_that_is_no_frame_is_skipped_and_the_next_wake_still_arr
     publisher = make_client(redis_url)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish(wake_channel(key_prefix), payload)
         await WakeChannel(publisher, key_prefix=key_prefix).publish("orders/7")
         wake = await reader.next_wake()
@@ -131,7 +130,7 @@ async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
     host_client = make_client(redis_url, encoding="latin-1")
     channel = WakeChannel(host_client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await channel.publish("caf\u00e9/7")
         assert await reader.next_wake() == Wake("caf\u00e9/7")
 
@@ -143,7 +142,7 @@ async def test_publish_fails_during_an_outage_and_delivers_after_it(
     publisher_client, outage = backend.publisher_with_outage()
     publisher = WakeChannel(publisher_client, key_prefix=key_prefix)
     async with Reader(WakeChannel(subscriber_client, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         outage.begin()
         with pytest.raises(StoreError):
             await publisher.publish("during")
@@ -175,23 +174,31 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         make_client(redis_url, health_check_interval=interval), key_prefix=key_prefix
     )
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
-    events = cast(AsyncGenerator[Wake | Resubscribed], channel.received())
-    try:
-        assert await within(anext(events)) == Resubscribed()
-        # redis-py sends its PING at the next read once the loop clock passes the interval.
-        clock = asyncio.get_running_loop()
+    clock = asyncio.get_running_loop()
+    handled: list[Wake] = []
+
+    def hold_the_loop_past_the_interval(wake: Wake) -> None:
+        # redis-py sends its PING at the next read once the loop clock passes the interval; a
+        # synchronous handler is the one place where the reader is not inside a read.
+        handled.append(wake)
         health_check_falls_due = clock.time() + interval
+        while clock.time() <= health_check_falls_due:
+            pass
 
-        async def health_check_is_due() -> bool:
-            return clock.time() > health_check_falls_due
+    async def handled_both() -> bool:
+        return len(handled) == 2
 
-        await until(health_check_is_due)
-        pending = asyncio.ensure_future(anext(events))
+    async with channel.following(
+        on_resync=lambda: None,
+        on_wake=hold_the_loop_past_the_interval,
+        on_failed=lambda error: pytest.fail(f"the following failed: {error!r}"),
+        ready_within=BOUND_SECONDS,
+    ):
         await publisher.publish("a")
         await publisher.publish("b")
-        assert [await within(pending), await within(anext(events))] == [Wake("a"), Wake("b")]
-    finally:
-        await events.aclose()
+        await until(handled_both)
+
+    assert handled == [Wake("a"), Wake("b")]
 
 
 @pytest.mark.parametrize("decode_responses", [False, True])
@@ -207,11 +214,11 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
     publisher = make_client(redis_url)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await publisher.publish(wake_channel(key_prefix), malformed)
         if decode_responses:
             # redis-py fails inside get_message on a decode error: tandem subscribes again.
-            await reader.next_resubscribed()
+            await reader.next_resynced()
         await WakeChannel(publisher, key_prefix=key_prefix).publish("orders/7")
         wake = await reader.next_wake()
         assert reader.running

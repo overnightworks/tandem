@@ -1,8 +1,9 @@
-"""A minimal host: its truth is a Redis hash that it re-reads at every Resubscribed."""
+"""A minimal host: its truth is a Redis hash that it re-reads at every resync."""
 
 from redis.asyncio import Redis
 
-from tandem import Resubscribed, Wake
+from tandem import Wake
+from tests.support.reader import Resynced
 
 
 class ScenarioHost:
@@ -18,8 +19,8 @@ class ScenarioHost:
         stored = await self._redis.hgetall(self._truth_key)
         self.served = {_text(key): _text(value) for key, value in stored.items()}
 
-    async def handle(self, event: Wake | Resubscribed) -> None:
-        if isinstance(event, Resubscribed):
+    async def handle(self, event: Wake | Resynced) -> None:
+        if isinstance(event, Resynced):
             await self.reread()
         else:
             self.served[event.address] = _text(

@@ -6,15 +6,28 @@ import sys
 
 from redis.asyncio import Redis
 
-from tandem import Resubscribed, WakeChannel
+from tandem import Wake, WakeChannel
+from tests.support.waiting import BOUND_SECONDS
+
+
+def _report(line: str) -> None:
+    print(line, flush=True)
 
 
 async def read(channel: WakeChannel) -> None:
-    async for event in channel.received():
-        print(
-            "RESUBSCRIBED" if isinstance(event, Resubscribed) else f"WAKE {event.address}",
-            flush=True,
-        )
+    def report_wake(wake: Wake) -> None:
+        _report(f"WAKE {wake.address}")
+
+    def report_failure(error: Exception) -> None:
+        _report(f"FAILED {type(error).__name__}")
+
+    async with channel.following(
+        on_resync=lambda: _report("RESYNCED"),
+        on_wake=report_wake,
+        on_failed=report_failure,
+        ready_within=BOUND_SECONDS,
+    ):
+        await asyncio.Event().wait()
 
 
 async def main(command: str, url: str, key_prefix: str, *address: str) -> None:

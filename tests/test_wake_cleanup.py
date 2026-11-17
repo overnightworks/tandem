@@ -39,7 +39,7 @@ async def test_cancelling_while_reading_unsubscribes_and_closes_the_connection(
 ):
     tasks_before = asyncio.all_tasks()
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
     assert not reader.running
     await _nothing_is_left(observer, key_prefix, tasks_before, proxy)
 
@@ -55,7 +55,7 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
     client = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=held_backoffs)
     async with Reader(channel) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         proxy.cut()
         await held_backoffs.reached(1)
     assert not reader.running

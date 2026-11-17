@@ -3,11 +3,11 @@
 import asyncio
 import logging
 import re
-from collections.abc import AsyncIterator
-from contextlib import suppress
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 
-from logline import StepTimer, current_traceparent
+from logline import StepTimer, current_traceparent, unit_trace
 from redis import exceptions as redis_errors
 from redis.asyncio.client import PubSub
 from redis.asyncio.connection import AbstractConnection
@@ -16,6 +16,7 @@ from tandem.client import Client
 from tandem.errors import (
     BACKOFF_FIRST_SECONDS,
     FailureReason,
+    StoreError,
     is_outage,
     next_backoff,
     store_error,
@@ -35,7 +36,7 @@ class Wake:
 
 
 @dataclass(frozen=True)
-class Resubscribed:
+class _Resubscribed:
     """Redis acknowledged the subscription (again): re-read everything this pod serves."""
 
 
@@ -90,11 +91,71 @@ class WakeChannel:
         await connection.send_command("PUBLISH", self._channel, payload)
         await connection.read_response()
 
-    async def received(self) -> AsyncIterator[Wake | Resubscribed]:
-        """Yield every confirmation of the subscription and every wake after it, until cancelled.
+    @asynccontextmanager
+    async def following(
+        self,
+        *,
+        on_resync: Callable[[], None],
+        on_wake: Callable[[Wake], None],
+        on_failed: Callable[[Exception], None],
+        ready_within: float,
+    ) -> AsyncIterator[None]:
+        """Follow the channel for the host while the context is open.
+
+        Entering returns after Redis first confirmed the subscription and `on_resync` returned;
+        with no confirmation within `ready_within` seconds it raises `StoreError(outage=True)`.
+        `on_resync()` runs at every confirmation, the first and after every reconnect: re-read
+        everything this pod serves. `on_wake(wake)` runs for every wake, inside the trace of its
+        sender. The handlers are synchronous and run one at a time in arrival order.
+
+        A refusal or a handler exception before entry returns is raised out of the entry. After it,
+        either ends the following: one `wake_follow.failed` line carries the error type and
+        `on_failed(error)` is called once. Leaving the context cancels the following, closes the
+        subscription and raises nothing of its own.
 
         A payload that is no valid UTF-8 or no frame is logged and skipped.
         """
+        ready: asyncio.Future[None] = asyncio.get_running_loop().create_future()
+        follower = asyncio.create_task(self._follow(ready, on_resync, on_wake, on_failed))
+        try:
+            confirmed, _ = await asyncio.wait({ready}, timeout=ready_within)
+            if not confirmed:
+                raise StoreError(
+                    f"subscribe to {self._channel} was not confirmed within {ready_within} s",
+                    outage=True,
+                )
+            ready.result()  # raises what stopped the following before it was ready
+            yield
+        finally:
+            follower.cancel()
+            with suppress(asyncio.CancelledError):
+                await follower
+
+    async def _follow(
+        self,
+        ready: asyncio.Future[None],
+        on_resync: Callable[[], None],
+        on_wake: Callable[[Wake], None],
+        on_failed: Callable[[Exception], None],
+    ) -> None:
+        try:
+            async for event in self._received():
+                if isinstance(event, _Resubscribed):
+                    on_resync()
+                    if not ready.done():
+                        ready.set_result(None)
+                else:
+                    with unit_trace(event.traceparent):
+                        on_wake(event)
+        except Exception as error:
+            if not ready.done():
+                ready.set_exception(error)
+                return
+            logger.error("wake_follow.failed", extra={"error_type": type(error).__name__})
+            on_failed(error)
+
+    async def _received(self) -> AsyncIterator[Wake | _Resubscribed]:
+        """Yield every confirmation of the subscription and every wake after it, until cancelled."""
         backoff = BACKOFF_FIRST_SECONDS
         failed_attempts = 0
         while True:
@@ -103,7 +164,7 @@ class WakeChannel:
                 await pubsub.subscribe(self._channel)
                 while True:
                     event = await self._next_event(pubsub)
-                    if isinstance(event, Resubscribed):
+                    if isinstance(event, _Resubscribed):
                         backoff = BACKOFF_FIRST_SECONDS
                         self._log_confirmed(failed_attempts)
                         failed_attempts = 0
@@ -123,7 +184,7 @@ class WakeChannel:
             await self._wait(backoff)
             backoff = next_backoff(backoff)
 
-    async def _next_event(self, pubsub: PubSub) -> Wake | Resubscribed:
+    async def _next_event(self, pubsub: PubSub) -> Wake | _Resubscribed:
         while True:
             message = await pubsub.get_message(timeout=None)
             if message is None:  # the reply to redis-py's health check is no event
@@ -168,10 +229,10 @@ class WakeChannel:
     def _log_confirmed(self, failed_attempts: int) -> None:
         logger.info("wake_subscription.confirmed", extra={"failed_attempt_count": failed_attempts})
 
-    def _event(self, message: dict[str, object]) -> Wake | Resubscribed | None:
+    def _event(self, message: dict[str, object]) -> Wake | _Resubscribed | None:
         """The event of a message; None, after its log line, for a payload that is no frame."""
         if message["type"] == "subscribe":
-            return Resubscribed()
+            return _Resubscribed()
         encoder = self._redis.get_encoder()
         payload = encoder.encode(message["data"])
         encoder.decode(payload, force=True)  # raises UnicodeDecodeError for an undecodable payload

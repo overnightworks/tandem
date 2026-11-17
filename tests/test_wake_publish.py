@@ -31,7 +31,7 @@ async def test_a_publish_that_never_reaches_redis_fails_and_wakes_nobody(
     direct = make_client(redis_url)
     host = ScenarioHost(direct, key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         await host.commit("orders/7", "shipped")
         proxy.drop_requests()
 
@@ -50,7 +50,7 @@ async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wak
 ):
     publisher = await _publisher_through(proxy, make_client, key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         proxy.drop_replies()
 
         with pytest.raises(StoreError):
@@ -70,7 +70,7 @@ async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_a
     await retrying.ping()
     publisher = WakeChannel(retrying, key_prefix=key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
         proxy.drop_replies_of_open_connections()
 
         with pytest.raises(StoreError):
@@ -92,7 +92,7 @@ async def test_a_single_connection_client_publishes_over_its_own_connection_besi
     publisher = WakeChannel(client, key_prefix=key_prefix)
     addresses = [f"orders/{number}" for number in range(5)]
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
-        await reader.next_resubscribed()
+        await reader.next_resynced()
 
         await asyncio.gather(client.ping(), *(publisher.publish(address) for address in addresses))
 

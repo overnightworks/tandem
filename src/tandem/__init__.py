@@ -9,9 +9,9 @@ from tandem.leases import Hold, Lapse, Leases, LeaseState, Liveness, Renewal, Ro
 from tandem.locks import Locks, LockState
 from tandem.lua import LUA_KIT
 from tandem.script import Script
-from tandem.wake import Resubscribed, Wake, WakeChannel
+from tandem.wake import Wake, WakeChannel
 
-__version__ = "0.8.2"
+__version__ = "0.9.0"
 
 __all__ = [
     "LUA_KIT",
@@ -28,7 +28,6 @@ __all__ = [
     "LockState",
     "Locks",
     "Renewal",
-    "Resubscribed",
     "Roster",
     "Script",
     "StoreError",
