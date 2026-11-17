@@ -30,6 +30,7 @@ dev = [
     "ruff>=0.4,<1",
     "pyright>=1.1.414,<2",
     "deptry==0.25.1",
+    "import-linter>=2.3,<3",
 ]
 
 [project.urls]
