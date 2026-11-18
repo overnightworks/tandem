@@ -312,8 +312,8 @@ wheels = [
 
 [[package]]
 name = "overnightworks-logline"
-version = "0.8.0"
-source = { git = "https://github.com/overnightworks/logline?tag=v0.8.0#5c91974a66e65ec47a2a517a9e8c0c3d67730c1e" }
+version = "1.0.0"
+source = { git = "https://github.com/overnightworks/logline?tag=v1.0.0#e37b04d720e444db42892fe84ae57e43a8e8e816" }
 dependencies = [
     { name = "opentelemetry-api" },
     { name = "structlog" },
@@ -343,7 +343,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "overnightworks-logline", specifier = ">=0.3.0,<0.9" },
+    { name = "overnightworks-logline", specifier = ">=0.3.0,<2" },
     { name = "redis", specifier = ">=5.3,<9" },
 ]
 
@@ -352,7 +352,7 @@ dev = [
     { name = "deptry", specifier = "==0.25.1" },
     { name = "fakeredis", extras = ["lua"], specifier = ">=2.35,<3" },
     { name = "import-linter", specifier = ">=2.3,<3" },
-    { name = "overnightworks-logline", git = "https://github.com/overnightworks/logline?tag=v0.8.0" },
+    { name = "overnightworks-logline", git = "https://github.com/overnightworks/logline?tag=v1.0.0" },
     { name = "pyright", specifier = ">=1.1.414,<2" },
     { name = "pytest", specifier = ">=8.3,<10" },
     { name = "pytest-asyncio", specifier = ">=1.3,<2" },
