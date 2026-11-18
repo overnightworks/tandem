@@ -80,7 +80,7 @@ no lapse queue: a crashed holder's lock expires after `lasts`, and what follows 
 
 The slots of a family live in one ZSET, `<key_prefix>:tandem:v1:slot:<family>:holders`, scored by each hold's
 expiry in ms; a hold's member is the JSON of its token's random part followed by its pools. A pool is never a
-key segment. Every `take` removes the expired members of its family, and each take sets the key's expiry to
+key segment. Every `take` removes the expired members of its family, and each granted take sets the key's expiry to
 `lasts`, so the key is gone once every hold has expired. Slots read and write no epoch.
 
 The channel is `<key_prefix>:tandem:v2:wake`: one channel per key prefix, so every pod that follows the
