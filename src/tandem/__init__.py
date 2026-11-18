@@ -1,4 +1,5 @@
-"""The fleet's shared Redis coordination: wake, deadlines, leases and locks on Redis time."""
+"""The fleet's shared Redis coordination: wake, deadlines, leases, locks and counted holds (slots)
+on Redis time."""
 
 from tandem import testing
 from tandem.client import Client
@@ -9,6 +10,7 @@ from tandem.leases import Hold, Lapse, Leases, LeaseState, Liveness, Renewal, Ro
 from tandem.locks import Locks, LockState
 from tandem.lua import LUA_KIT
 from tandem.script import Script
+from tandem.slots import Slots
 from tandem.wake import Wake, WakeChannel
 
 __version__ = "0.12.1"
@@ -30,6 +32,7 @@ __all__ = [
     "Renewal",
     "Roster",
     "Script",
+    "Slots",
     "StoreError",
     "Wake",
     "WakeChannel",

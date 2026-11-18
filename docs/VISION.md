@@ -3,13 +3,15 @@
 ## What it does
 
 tandem is where the fleet's apps get their multi-pod coordination through Redis, once, so that each app does
-not grow its own. An app that runs in several pods uses it for four things:
+not grow its own. An app that runs in several pods uses it for five things:
 
 - the wake: tell its other pods that something changed, and know after any break in the connection that it
   must read its state again;
 - deadlines: a key that comes due on Redis's clock and reaches one claimer at a time;
 - leases: a holder's claim to be alive, with a generation per start and a claim on each lapse;
-- locks: a hold on a name that only its generation extends or releases, started only when none is held.
+- locks: a hold on a name that only its generation extends or releases, started only when none is held;
+- slots: a counted hold, at most N live holders per pool across pods, taken in several pools at once or in
+  none, each expiring on Redis's clock.
 
 It carries addresses and generations and never contents: the truth stays in the host's own store. A fix to
 how a wake is lost or doubled, or how a lease lapses, is made once, and every app gets it by taking the next

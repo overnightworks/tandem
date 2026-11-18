@@ -95,3 +95,8 @@ def lock_keys(key_prefix: str, family: str) -> LockKeys:
     return LockKeys(
         epoch=epoch_key(key_prefix), expiry=f"{base}:expiry", generation=f"{base}:generation"
     )
+
+
+def slot_key(key_prefix: str, family: str) -> str:
+    """The ZSET that holds every live hold of the slots of `family` in the app of `key_prefix`."""
+    return f"{_app(key_prefix)}:slot:{checked_segment(family, argument='family')}:holders"

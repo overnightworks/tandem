@@ -14,13 +14,14 @@ from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.exceptions import ConnectionError, TimeoutError
 
-from tandem import Client, Deadlines, Leases, Locks
+from tandem import Client, Deadlines, Leases, Locks, Slots
 from tandem.testing import settle_epoch
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.locks import FAMILY
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
+from tests.support.slots import FAMILY as SLOT_FAMILY
 from tests.support.wake_backends import FakeBackend, RedisBackend, RedisFixtures, WakeBackend
 
 
@@ -114,6 +115,18 @@ def new_locks(key_prefix: str, settled_epoch: None) -> Callable[..., Locks]:
         client: Client, *, family: str = FAMILY, lasts: timedelta = timedelta(seconds=30)
     ) -> Locks:
         return Locks(client, key_prefix=key_prefix, family=family, lasts=lasts)
+
+    return build
+
+
+@pytest.fixture
+def new_slots(key_prefix: str) -> Callable[..., Slots]:
+    """Slots of one family under the test's prefix; every call with the same family shares them."""
+
+    def build(
+        client: Client, *, family: str = SLOT_FAMILY, lasts: timedelta = timedelta(seconds=30)
+    ) -> Slots:
+        return Slots(client, key_prefix=key_prefix, family=family, lasts=lasts)
 
     return build
 
