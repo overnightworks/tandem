@@ -56,8 +56,10 @@ async def test_releasing_an_expired_but_unpruned_hold_returns_false_and_removes_
     await until_redis_ms(client, first_taken_at + LATER_TAKE_MS)
     # A later take keeps the family key alive past the first hold's expiry without pruning it.
     assert await slots.take({"person-b": 2}) is not None
-    await until_redis_ms(client, first_taken_at + LASTS_MS + 20)
     family = slot_key(key_prefix, FAMILY)
+    expiry = await observer.zscore(family, expired)
+    assert expiry is not None
+    await until_redis_ms(client, int(expiry) + 1)
     assert await observer.zcard(family) == 2
 
     assert await slots.release(expired) is False
