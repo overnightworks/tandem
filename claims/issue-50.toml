@@ -1,8 +1,0 @@
-claim_id = "3725772e16dd40e9b370e8ee22992c0b"
-agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
-role = "builder"
-base = "43d63463fa8b149e4ba97b1e238bda423ea092e4"
-branch = "claude/issue-50-tandem-offers-a-counted-hold"
-scope = ["README.md", "docs/ARCHITECTURE.md", "docs/VISION.md", "docs/reference.md", "pyproject.toml", "src/tandem/__init__.py", "src/tandem/keys.py", "src/tandem/slots.py", "tests"]
-opened_commit = "764405381974cbfeb077236155dc610107531021"
-whole_reason = "One new owner with its key, its export, its host duties and the standard's lines, about 160 production lines in three files; split, Slots would ship without the duties a host needs."
