@@ -48,7 +48,7 @@ async def test_releasing_an_expired_but_unpruned_hold_returns_false_and_removes_
 ):
     client = make_client(redis_url)
     slots = new_slots(client, lasts=LASTS)
-    expired, _ = await take_hold_left_expired_beside_a_live_one(
+    expired = await take_hold_left_expired_beside_a_live_one(
         slots, client, observer, key_prefix, lasts=LASTS
     )
     family = slot_key(key_prefix, FAMILY)

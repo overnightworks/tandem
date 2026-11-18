@@ -9,6 +9,7 @@ from tandem.keys import slot_key
 from tests.support.deadlines import until_redis_ms
 
 FAMILY = "streams"
+ATTEMPTS = 3
 
 
 async def keys_of(observer: Redis, key_prefix: str) -> set[str]:
@@ -18,19 +19,26 @@ async def keys_of(observer: Redis, key_prefix: str) -> set[str]:
 
 async def take_hold_left_expired_beside_a_live_one(
     slots: Slots, client: Redis, observer: Redis, key_prefix: str, *, lasts: timedelta
-) -> tuple[str, int]:
+) -> str:
     """Take a hold, take a second half a `lasts` before the first expires, wait past that expiry.
 
     The second take keeps the family key alive past the first hold's expiry, and nothing prunes the
-    first hold before the caller acts. Returns the first hold's token and its stored expiry in ms,
-    read before the second take.
+    first hold before the caller acts. Returns the first hold's token. A stall that lets the first
+    hold expire before the second take clears the family and starts over, up to `ATTEMPTS` times.
     """
-    expired = await slots.take({"person-a": 1})
-    assert expired is not None
-    expiry = await observer.zscore(slot_key(key_prefix, FAMILY), expired)
-    assert expiry is not None
-    expiry_ms = int(expiry)
-    await until_redis_ms(client, expiry_ms - int(lasts.total_seconds() * 1000) // 2)
-    assert await slots.take({"person-b": 1}) is not None
-    await until_redis_ms(client, expiry_ms + 1)
-    return expired, expiry_ms
+    family = slot_key(key_prefix, FAMILY)
+    attempt = 0
+    while True:
+        attempt += 1
+        expired = await slots.take({"person-a": 1})
+        assert expired is not None
+        expiry = await observer.zscore(family, expired)
+        assert expiry is not None
+        expiry_ms = int(expiry)
+        await until_redis_ms(client, expiry_ms - int(lasts.total_seconds() * 1000) // 2)
+        assert await slots.take({"person-b": 1}) is not None
+        await until_redis_ms(client, expiry_ms + 1)
+        if await observer.zcard(family) == 2 and await observer.zscore(family, expired) is not None:
+            return expired
+        assert attempt < ATTEMPTS, f"no expired hold beside a live one in {ATTEMPTS} attempts"
+        await observer.delete(family)
