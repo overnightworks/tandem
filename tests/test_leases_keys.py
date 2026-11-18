@@ -39,7 +39,7 @@ async def test_a_family_named_like_a_fixed_key_shares_no_key_and_meets_no_wrongt
     handled = Handled()
     async with serving(leases, handled):
         await handled.received()
-    claimed = await deadlines.claim_due(claimer="b", limit=1)
+    claimed = await deadlines.claim_due(limit=1)
 
     assert own.isdisjoint(others)
     assert [due.key for due in claimed] == ["room-1"]

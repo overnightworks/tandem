@@ -30,7 +30,7 @@ async def claim_when_due(deadlines: Deadlines, *, limit: int = 10) -> list[Due]:
     claimed: list[Due] = []
 
     async def found() -> bool:
-        claimed.extend(await deadlines.claim_due(claimer="the test", limit=limit))
+        claimed.extend(await deadlines.claim_due(limit=limit))
         return bool(claimed)
 
     await until(found)

@@ -3,7 +3,7 @@
 The fleet's shared Redis coordination for apps that run in several pods. Today it holds four tools. A wake
 channel with resync: a pod that changed something tells the others which address changed, and every
 reader learns when it must re-read everything it serves. Deadlines on Redis time: a key comes due on
-Redis's own clock and reaches one claimer at a time. Leases: a holder's claim to be alive, with a
+Redis's own clock and reaches one worker at a time. Leases: a holder's claim to be alive, with a
 generation per start and a claim on each lapse. Locks: a hold on a name that only its generation extends
 or releases, started only when none is held. It builds on [redis-py](https://redis.readthedocs.io/)'s
 asyncio client and writes its log lines through [logline](https://github.com/overnightworks/logline).
@@ -74,7 +74,7 @@ deadlines = Deadlines(redis, key_prefix="skat", kind="seats", claim_for=timedelt
 
 
 async def expire_seats(served: Served) -> None:
-    for due in await deadlines.claim_due(claimer="pod-3", limit=20):
+    for due in await deadlines.claim_due(limit=20):
         await served.expire(seat=due.key, fence=due.claim)  # the host fences its own effect
         await deadlines.done(due)
 
@@ -134,7 +134,7 @@ and the ruling is recorded in this section; the process is marketplace's
   all and the host reconciles; a lost lease or lock reads UNKNOWN, not GONE or free, for `lasts`, and a first
   `acquire` of an app with no epoch yet returns None for `lasts`. What this needs of Redis is stated in the
   [architecture](docs/ARCHITECTURE.md#6-constraints-and-reasons). A step of Redis's clock moves every expiry.
-- A lapse whose handler always raises returns to a claimer every `claim_for`; a family without
+- A lapse whose handler always raises returns to a worker every `claim_for`; a family without
   `serve_lapses` keeps its lapse queue until the next restart.
 - A paused holder lapses after `lasts`; its stale effects are refused only by the host's own fence.
 - A lock has no forced release and no holder label: its host keeps who holds it in its own store.

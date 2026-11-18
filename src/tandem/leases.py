@@ -373,7 +373,6 @@ class Leases:
         self,
         handle: Callable[[Lapse], Awaitable[None]],
         *,
-        claimer: str,
         every: timedelta,
     ) -> NoReturn:
         """Hand every lapse to `handle`, at least once, until cancelled.
@@ -389,7 +388,7 @@ class Leases:
         while True:
             tally, started = _RoundTally(), time.perf_counter()
             try:
-                await self._serve_round(handle, claimer, tally)
+                await self._serve_round(handle, tally)
             except StoreError as error:
                 if not error.outage:
                     raise
@@ -405,10 +404,10 @@ class Leases:
         await asyncio.sleep(seconds)
 
     async def _serve_round(
-        self, handle: Callable[[Lapse], Awaitable[None]], claimer: str, tally: _RoundTally
+        self, handle: Callable[[Lapse], Awaitable[None]], tally: _RoundTally
     ) -> None:
         await self._sweep.run(self._key_names(), self._arguments())
-        while batch := await self._lapses.claim_due(claimer=claimer, limit=_BATCH):
+        while batch := await self._lapses.claim_due(limit=_BATCH):
             await self._handle_batch(handle, batch, tally)
 
     async def _handle_batch(
