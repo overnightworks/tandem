@@ -67,7 +67,9 @@ async def save(served: Served, address: str, value: str) -> None:
     try:
         await channel.publish(address)
     except StoreError:
-        await channel.publish(address)  # delivery was uncertain; a duplicate wake is harmless
+        # The client's Retry gave up and the delivery is uncertain; this runs the Retry again, and a
+        # duplicate wake is harmless.
+        await channel.publish(address)
 
 
 deadlines = Deadlines(redis, key_prefix="skat", kind="seats", claim_for=timedelta(seconds=30))

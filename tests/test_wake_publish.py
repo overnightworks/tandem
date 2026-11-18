@@ -1,6 +1,4 @@
-import asyncio
 from collections.abc import Awaitable, Callable
-from typing import cast
 
 import pytest
 from logline import Outcome, current_traceparent, unit_trace
@@ -63,7 +61,7 @@ async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wak
         assert reader.drain() == []
 
 
-async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_again(
+async def test_a_publish_whose_reply_is_lost_is_sent_again_under_the_clients_retry(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
@@ -73,50 +71,36 @@ async def test_a_publish_is_sent_once_although_the_clients_retry_would_send_it_a
         await reader.next_resynced()
         proxy.drop_replies_of_open_connections()
 
-        with pytest.raises(StoreError):
-            await publisher.publish("orders/7")
+        await publisher.publish("orders/7")
 
         await WakeChannel(make_client(redis_url), key_prefix=key_prefix).publish("barrier")
-        assert [await reader.next_wake(), await reader.next_wake()] == [
+        assert [await reader.next_wake() for _ in range(3)] == [
+            Wake("orders/7"),
             Wake("orders/7"),
             Wake("barrier"),
         ]
         assert reader.drain() == []
 
 
-async def test_a_single_connection_client_publishes_over_its_own_connection_beside_other_commands(
-    make_client: Callable[..., Redis], redis_url: str, key_prefix: str
+async def test_a_publish_whose_replies_are_all_lost_fails_once_the_clients_retry_gives_up(
+    proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
-    client = make_client(redis_url, single_connection_client=True, max_connections=1)
-    await client.ping()
-    publisher = WakeChannel(client, key_prefix=key_prefix)
-    addresses = [f"orders/{number}" for number in range(5)]
+    retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 2), socket_timeout=0.3)
+    await retrying.ping()
+    publisher = WakeChannel(retrying, key_prefix=key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
+        proxy.drop_replies()
 
-        await asyncio.gather(client.ping(), *(publisher.publish(address) for address in addresses))
+        with pytest.raises(StoreError):
+            await publisher.publish("orders/7")
 
-        assert {await reader.next_wake() for _ in addresses} == {Wake(a) for a in addresses}
-        assert reader.drain() == []
-
-
-class _SingleConnectionClientWithoutTheLock:
-    """What a redis-py that renamed its single-connection lock presents to WakeChannel."""
-
-    connection = object()
-
-    async def initialize(self) -> _SingleConnectionClientWithoutTheLock:
-        return self
-
-
-async def test_a_single_connection_client_without_the_lock_tandem_relies_on_fails_with_its_name(
-    key_prefix: str,
-):
-    client = cast(Redis, _SingleConnectionClientWithoutTheLock())
-    channel = WakeChannel(client, key_prefix=key_prefix)
-
-    with pytest.raises(RuntimeError, match="_single_conn_lock"):
-        await channel.publish("orders/7")
+        await WakeChannel(make_client(redis_url), key_prefix=key_prefix).publish("barrier")
+        wakes = [await reader.next_wake()]
+        while wakes[-1] != Wake("barrier"):
+            wakes.append(await reader.next_wake())
+        assert wakes[:-1] != []
+        assert set(wakes[:-1]) == {Wake("orders/7")}
 
 
 async def test_a_publish_writes_one_line_in_the_hosts_trace_whether_it_succeeds_or_is_refused(

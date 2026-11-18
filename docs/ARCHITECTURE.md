@@ -155,10 +155,11 @@ the commands and the rules for waits and outages.
 - `on_resync` is called for every `subscribe` confirmation Redis sends, including the one redis-py's own
   re-subscription triggers inside the client's retry budget; both redis-py versions CI runs deliver it through
   `get_message`, so tandem never changes the host's client settings, pool or `Retry`.
-- `publish` is one `PUBLISH` that is never retried or queued: a queued wake would outlive the state it
-  describes, and a retry cannot tell a lost request from a lost reply. It sends the one command itself on a
-  pooled connection, so a `publish` is absent from redis-py's operation metrics; the [reference](reference.md)
-  says what the client's `Retry` still governs.
+- `publish` is one `PUBLISH` under the host client's own `Retry`, never queued: a queued wake would outlive
+  the state it describes, and tandem has no client of its own, so the host's retry, pool and timeouts
+  govern it as they govern every other command. A retry cannot tell a lost request from a lost reply, so a
+  wake can arrive twice, and a duplicate is harmless because a wake names what changed, never its
+  content; the [reference](reference.md) says when `publish` ends.
 - The wake payload is a frame that carries the sender's traceparent beside the address. The handlers are
   synchronous and `following` runs them on its one reader task, in `unit_trace`, so handling is one at a time
   in Redis's order and a trace ends with its call. The channel's version segment is a contract between pods
