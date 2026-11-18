@@ -36,6 +36,8 @@ Module owners in `tandem`:
   `Deadlines` over any three keys), so a lapse is claimed, extended and finished like a deadline.
 - `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations.
   It shares the app's epoch and `Liveness` with `leases` and has no lapse queue.
+- `slots` owns `Slots`: the take and release scripts and the slot tokens. It is no extension of `locks`: a
+  lock does exclusion with fencing and the epoch, a slot counts holders per pool and reads no epoch.
 - `lua` owns `LUA_KIT`, the one implementation of each transition that the classes and a host's script run;
   `script` owns `Script`, which prepends it, runs by SHA and reloads on `NOSCRIPT`; `client` owns `Client`.
 - `keys` owns every name tandem gives in Redis and the check of a key prefix and a kind.
@@ -119,6 +121,10 @@ stateDiagram-v2
 
 An absent lock reads free only once `lasts` have passed since the epoch; before that `acquire` returns None.
 
+A slot family is one ZSET of every live hold, scored by its expiry; a hold's member is the JSON of its
+random part followed by its pools. A take prunes the expired members, counts the live ones per pool,
+refuses when any pool is at its cap and else adds its member, in one script; a release removes the member.
+
 ## 4. Deployment View
 
 A library in the host's environment, installed by a pinned git tag; nothing of tandem is deployed or run.
@@ -135,10 +141,10 @@ whether the wake arrived. The [reference](reference.md) says how a failure reach
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event with its fields in `extra=`. logline's `StepTimer`
-times `publish`, each lease call and each lock call; `Deadlines` and `Script.run` write no line. A lapse
+times `publish`, each lease call, each lock call and each slot call; `Deadlines` and `Script.run` write no line. A lapse
 handler and a `serve_lapses` round write their own lines, because their levels and traceback do not fit the
 timer. tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
-generation, a value that can end a lease. Each lapse handling runs in its own trace (`unit_trace`), so its
+generation, a value that can end a lease, or a slot's pool or token. Each lapse handling runs in its own trace (`unit_trace`), so its
 lines and the host handler's share a `trace_id`. The [reference](reference.md#what-tandem-logs) lists the
 events; they are public.
 
@@ -165,12 +171,13 @@ the commands and the rules for waits and outages.
   in Redis's order and a trace ends with its call. The channel's version segment is a contract between pods
   of different releases; the [reference](reference.md#redis-layout-and-retries) states the frame and what a
   change costs a host.
-- Every transition of a deadline, lease or lock is one Lua script that reads `TIME`, so no pod clock is
+- Every transition of a deadline, lease, lock or slot is one Lua script that reads `TIME`, so no pod clock is
   involved and a transition cannot interleave with another.
 - A deadline key or lock name is a ZSET member and a HASH field, never a key segment, so a free-form value
-  cannot reach a fixed key. The segment after `v1` is one of the fixed tokens `epoch`, `d`, `l` and `lock`, and
-  a caller's `kind` or `family` appears only after its token and before a fixed suffix.
-- Generations and claim tokens are 128 random bits from `secrets`, generated in Python because Lua's random is
+  cannot reach a fixed key. A slot's pools live only inside its member, never in a key segment. The segment
+  after `v1` is one of the fixed tokens `epoch`, `d`, `l`, `lock` and `slot`, and a caller's `kind` or `family`
+  appears only after its token and before a fixed suffix.
+- Generations, claim tokens and the random part of a slot token are 128 random bits from `secrets`, generated in Python because Lua's random is
   not fit, compared by equality and never ordered, so no counter is needed that a Redis restart would reset;
   the collision bound is accepted.
 - The epoch is created by `SET NX` inside every lease and lock script, so UNKNOWN ends at most `lasts` after
@@ -179,6 +186,9 @@ the commands and the rules for waits and outages.
   keys and keeps the epoch (an eviction, a partial restore) reads a lost lock as free, and two holders can
   then be live together. The guarantee holds on a Redis that forgets all or nothing: one instance, never a
   replica (it can lag behind the epoch or the locks) and never a partial snapshot.
+- `Slots` reads and writes no epoch: after a Redis restart takes are granted at once, so a cap can be
+  exceeded by the lost holds for at most `lasts`. The epoch guards exclusion, where two holders are a fault;
+  a load cap tolerates a bounded overshoot, and an epoch would refuse every take for `lasts` after a restart.
 - A lock is not a lease: `Leases.renew` extends a live lease for any caller, so a lock built on it would be
   held for ever by the losers that keep polling; `extend` needs the generation.
 - `tandem.lock_state` returns nil for a free lock, so `if tandem.lock_state(...) then` fails closed: a held
