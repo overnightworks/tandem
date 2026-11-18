@@ -206,7 +206,9 @@ duties remain for the wake, two more cover deadlines, four cover leases, four co
     the reply been lost, and the hold then occupies its slots until `lasts` runs out. The host treats the
     take as refused and does not retry in a loop that would fill the pool.
 15. **The same `lasts` for every pod of a family.** A hold's expiry is stamped with the taking pod's `lasts`,
-    so a pod that passes a different span lets its holds count longer or shorter for every other pod.
+    and each granted take sets the whole family key's expiry to that pod's `lasts`. A pod with a shorter
+    `lasts` therefore drops every other pod's holds early, once the key runs out, and the cap is exceeded; a
+    longer one only keeps the key alive past expired holds, which a take still prunes by score.
 16. **After a Redis restart a cap can be exceeded by the lost holds for at most `lasts`.** Slots read no
     epoch, so takes are granted at once, and the host accepts that overshoot.
     A host that moves an existing limiter onto `Slots` counts in two places while old and new pods run
