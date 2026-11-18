@@ -12,7 +12,6 @@ from datetime import timedelta
 from logline import StepTimer, current_traceparent, unit_trace
 from redis import exceptions as redis_errors
 from redis.asyncio.client import PubSub
-from redis.asyncio.connection import AbstractConnection
 
 from tandem.client import Client
 from tandem.deadlines import checked_span
@@ -135,50 +134,22 @@ class WakeChannel(_Following):
         self._redis = redis
 
     async def publish(self, address: str) -> None:
-        """Send one PUBLISH of `address` with the caller's current trace.
+        """Send a PUBLISH of `address` with the caller's current trace, under the client's `Retry`.
 
-        A failure means the delivery is uncertain; it is not resent.
+        It raises `StoreError` once the client's `Retry` gives up. The PUBLISH may reach Redis more
+        than once, so a wake can arrive twice.
         """
         async with StepTimer("wake_publication.ended", logger):
             await self._publish(address, current_traceparent())
 
     async def _publish(self, address: str, traceparent: str | None) -> None:
-        # The client's own execute_command would run the PUBLISH under the client's Retry, which can
-        # send it again after a lost reply; the connection is driven directly instead.
-        redis = self._redis
+        encoder = self._redis.get_encoder()
+        trace = encoder.encode(traceparent or "")
+        payload = b"%d:%b%b" % (len(trace), trace, encoder.encode(address))
         try:
-            await redis.initialize()
-            if (own := redis.connection) is not None:
-                # A single-connection client keeps the pool's connection and serializes its own
-                # commands on this lock. redis-py offers no public way to take it without running
-                # the command through its Retry, so this relies on the private attribute, as the
-                # client's own execute_command does; a rename in redis-py fails loud below.
-                try:
-                    lock = redis._single_conn_lock
-                except AttributeError as error:
-                    raise RuntimeError(
-                        "tandem publishes over a single-connection client through redis-py's "
-                        "Redis._single_conn_lock, which this redis-py version does not have"
-                    ) from error
-                async with lock:
-                    await self._send_publish(own, address, traceparent)
-            else:
-                pool = redis.connection_pool
-                connection = await pool.get_connection()
-                try:
-                    await self._send_publish(connection, address, traceparent)
-                finally:
-                    await pool.release(connection)
+            await self._redis.publish(self._channel, payload)
         except redis_errors.RedisError as error:
             raise store_error(f"publish to {self._channel}", error) from error
-
-    async def _send_publish(
-        self, connection: AbstractConnection, address: str, traceparent: str | None
-    ) -> None:
-        trace = connection.encoder.encode(traceparent or "")
-        payload = b"%d:%b%b" % (len(trace), trace, connection.encoder.encode(address))
-        await connection.send_command("PUBLISH", self._channel, payload)
-        await connection.read_response()
 
     async def _received(self) -> AsyncGenerator[Wake | _Resubscribed]:
         backoff = BACKOFF_FIRST_SECONDS
