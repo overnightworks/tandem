@@ -1,0 +1,8 @@
+claim_id = "f27db4028f9e47f8814ae224678db9ab"
+agent = "Claude 15723481-ee57-435c-84df-cf86d822b4e1"
+role = "builder"
+base = "b919cb3832fff6a3b74793025dc74fe2e4e76c34"
+branch = "claude/issue-58-publish-under-retry"
+scope = ["README.md", "docs/ARCHITECTURE.md", "docs/reference.md", "src/tandem/wake.py", "tests"]
+opened_commit = "12e6d8a1e9f8113deca7fedcba4fab070b0e9411"
+whole_reason = "One send path replaced, with the bound and duty text in three documents and the publish cells that prove it."
