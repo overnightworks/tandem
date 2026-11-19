@@ -1,5 +1,6 @@
 """Tools of the slot tests: the shared family, a read of the keys left and an expired hold."""
 
+from collections.abc import Callable
 from datetime import timedelta
 
 from redis.asyncio import Redis
@@ -9,7 +10,7 @@ from tandem.keys import slot_key
 from tests.support.deadlines import until_redis_ms
 
 FAMILY = "streams"
-ATTEMPTS = 3
+EXPIRING_HOLD_LASTS = timedelta(seconds=1)
 
 
 async def keys_of(observer: Redis, key_prefix: str) -> set[str]:
@@ -18,27 +19,20 @@ async def keys_of(observer: Redis, key_prefix: str) -> set[str]:
 
 
 async def take_hold_left_expired_beside_a_live_one(
-    slots: Slots, client: Redis, observer: Redis, key_prefix: str, *, lasts: timedelta
+    new_slots: Callable[..., Slots], client: Redis, observer: Redis, key_prefix: str
 ) -> str:
-    """Take a hold, take a second half a `lasts` before the first expires, wait past that expiry.
+    """Take a short hold, then a longer one, and wait past the first expiry.
 
-    The second take keeps the family key alive past the first hold's expiry, and nothing prunes the
-    first hold before the caller acts. Returns the first hold's token. A stall that lets the first
-    hold expire before the second take clears the family and starts over, up to `ATTEMPTS` times.
+    The second take prunes every hold already expired, so the first hold, which lasts
+    `EXPIRING_HOLD_LASTS`, survives only if the second take starts within that time. The second
+    hold then keeps the family key alive, and nothing prunes the first hold before the caller
+    acts. Returns the first hold's token.
     """
     family = slot_key(key_prefix, FAMILY)
-    attempt = 0
-    while True:
-        attempt += 1
-        expired = await slots.take({"person-a": 1})
-        assert expired is not None
-        expiry = await observer.zscore(family, expired)
-        assert expiry is not None
-        expiry_ms = int(expiry)
-        await until_redis_ms(client, expiry_ms - int(lasts.total_seconds() * 1000) // 2)
-        assert await slots.take({"person-b": 1}) is not None
-        await until_redis_ms(client, expiry_ms + 1)
-        if await observer.zcard(family) == 2 and await observer.zscore(family, expired) is not None:
-            return expired
-        assert attempt < ATTEMPTS, f"no expired hold beside a live one in {ATTEMPTS} attempts"
-        await observer.delete(family)
+    expired = await new_slots(client, lasts=EXPIRING_HOLD_LASTS).take({"person-a": 1})
+    assert expired is not None
+    assert await new_slots(client).take({"person-b": 1}) is not None
+    expiry = await observer.zscore(family, expired)
+    assert expiry is not None
+    await until_redis_ms(client, int(expiry) + 1)
+    return expired
