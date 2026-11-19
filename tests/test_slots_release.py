@@ -8,8 +8,7 @@ from tandem.keys import slot_key
 from tests.support.backends import Backend
 from tests.support.slots import FAMILY, take_hold_left_expired_beside_a_live_one
 
-LASTS_MS = 1000
-LASTS = timedelta(milliseconds=LASTS_MS)
+LASTS = timedelta(milliseconds=300)
 
 
 async def test_release_frees_every_pool_of_the_hold_and_a_second_release_returns_false(
@@ -47,9 +46,9 @@ async def test_releasing_an_expired_but_unpruned_hold_returns_false_and_removes_
     key_prefix: str,
 ):
     client = make_client(redis_url)
-    slots = new_slots(client, lasts=LASTS)
+    slots = new_slots(client)
     expired = await take_hold_left_expired_beside_a_live_one(
-        slots, client, observer, key_prefix, lasts=LASTS
+        new_slots(client, lasts=LASTS), slots, client, observer, key_prefix
     )
     family = slot_key(key_prefix, FAMILY)
     assert await observer.zcard(family) == 2
