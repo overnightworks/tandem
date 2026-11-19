@@ -1,0 +1,7 @@
+claim_id = "9136f751d7be4378bd544e36d4deaeb2"
+agent = "Claude a34769d9-85d5-42f3-86c6-39d67ab605cf"
+role = "builder"
+base = "bee7191ed54c2715c9bcd6f1b997defcde2dc892"
+branch = "claude/issue-67-slot-tests-arrange-an-expired-hold-witho"
+scope = ["tests/support/slots.py", "tests/test_slots_expiry.py", "tests/test_slots_release.py"]
+opened_commit = "afaec00ae3a2002cec4c36aea5d867478fc99e00"
