@@ -1,5 +1,4 @@
 from collections.abc import Callable
-from datetime import timedelta
 
 from redis.asyncio import Redis
 
@@ -7,8 +6,6 @@ from tandem import Slots
 from tandem.keys import slot_key
 from tests.support.backends import Backend
 from tests.support.slots import FAMILY, take_hold_left_expired_beside_a_live_one
-
-LASTS = timedelta(milliseconds=300)
 
 
 async def test_release_frees_every_pool_of_the_hold_and_a_second_release_returns_false(
@@ -48,7 +45,7 @@ async def test_releasing_an_expired_but_unpruned_hold_returns_false_and_removes_
     client = make_client(redis_url)
     slots = new_slots(client)
     expired = await take_hold_left_expired_beside_a_live_one(
-        new_slots(client, lasts=LASTS), slots, client, observer, key_prefix
+        new_slots, client, observer, key_prefix
     )
     family = slot_key(key_prefix, FAMILY)
     assert await observer.zcard(family) == 2

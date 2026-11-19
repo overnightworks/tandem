@@ -58,7 +58,7 @@ async def test_a_take_frees_the_expired_hold_while_a_later_live_hold_keeps_the_f
     client = make_client(redis_url)
     slots = new_slots(client)
     expired = await take_hold_left_expired_beside_a_live_one(
-        new_slots(client, lasts=LASTS), slots, client, observer, key_prefix
+        new_slots, client, observer, key_prefix
     )
     family = slot_key(key_prefix, FAMILY)
     assert await observer.zcard(family) == 2
