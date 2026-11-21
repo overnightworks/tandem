@@ -13,7 +13,7 @@ from tandem.script import Script
 from tandem.slots import Slots
 from tandem.wake import Wake, WakeChannel
 
-__version__ = "0.13.0"
+__version__ = "0.13.1"
 
 __all__ = [
     "LUA_KIT",
