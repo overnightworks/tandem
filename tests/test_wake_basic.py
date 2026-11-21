@@ -12,7 +12,7 @@ from tandem.wake import _Resubscribed
 from tests.support.backends import Backend
 from tests.support.logs import LogLines
 from tests.support.reader import Reader, Resynced
-from tests.support.waiting import BOUND, until
+from tests.support.waiting import BOUND, until, within
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
@@ -292,17 +292,26 @@ async def test_channels_of_distinct_prefixes_on_one_redis_never_hear_each_other(
         ]
 
 
+async def _next_message(tap: PubSub) -> dict[str, bytes]:
+    while (message := await tap.get_message(ignore_subscribe_messages=True, timeout=1)) is None:
+        pass
+    return message
+
+
 async def test_a_wake_on_a_channel_of_another_version_segment_reaches_no_reader(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
     """Spec: WAKE-22."""
     publisher = make_client(redis_url)
-    *head, _version, last = wake_channel(key_prefix).split(":")
-    other_version = ":".join([*head, "other-version", last])
+    foreign_channel = f"{key_prefix}:foreign-version:wake"
+    async with publisher.pubsub() as tap:
+        await tap.subscribe(wake_channel(key_prefix))
+        await WakeChannel(publisher, key_prefix=key_prefix).publish("foreign")
+        message = await within(_next_message(tap))
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
 
-        await publisher.publish(other_version, b"0:foreign")
+        await publisher.publish(foreign_channel, message["data"])
         await WakeChannel(publisher, key_prefix=key_prefix).publish("own")
 
         assert await reader.next_wake() == Wake("own")

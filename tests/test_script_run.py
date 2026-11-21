@@ -163,18 +163,29 @@ async def test_a_script_that_fails_after_a_write_keeps_the_write(
 _COUNT_RUNS = "if ARGV[1] == 'warm-up' then return 0 end\nreturn redis.call('INCR', KEYS[1])"
 
 
+type ScriptOnLossyLink = Callable[[int], Awaitable[tuple[Script, str]]]
+
+
+@pytest.fixture
+def script_on_lossy_link(
+    proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str
+) -> ScriptOnLossyLink:
+    async def arrange(retries: int) -> tuple[Script, str]:
+        counter = f"{key_prefix}:runs"
+        client = make_client(proxy.url, retry=Retry(NoBackoff(), retries), socket_timeout=0.3)
+        script = Script(client, _COUNT_RUNS)
+        await script.run([counter], ["warm-up"])  # loaded, so no reply is lost as NOSCRIPT
+        proxy.drop_replies_of_open_connections()
+        return script, counter
+
+    return arrange
+
+
 async def test_a_client_without_retries_raises_after_a_lost_reply_and_the_script_ran_once(
-    proxy: TcpProxy,
-    make_client: Callable[..., Redis],
-    observer: Redis,
-    key_prefix: str,
+    script_on_lossy_link: ScriptOnLossyLink, observer: Redis
 ):
     """Spec: SCRIPT-3."""
-    counter = f"{key_prefix}:runs"
-    client = make_client(proxy.url, retry=Retry(NoBackoff(), 0), socket_timeout=0.3)
-    script = Script(client, _COUNT_RUNS)
-    await script.run([counter], ["warm-up"])  # loads the script, so no reply is lost as NOSCRIPT
-    proxy.drop_replies_of_open_connections()
+    script, counter = await script_on_lossy_link(0)
 
     with pytest.raises(StoreError):
         await script.run([counter], ["run"])
@@ -183,17 +194,10 @@ async def test_a_client_without_retries_raises_after_a_lost_reply_and_the_script
 
 
 async def test_a_client_with_retries_runs_the_script_twice_after_a_lost_reply(
-    proxy: TcpProxy,
-    make_client: Callable[..., Redis],
-    observer: Redis,
-    key_prefix: str,
+    script_on_lossy_link: ScriptOnLossyLink, observer: Redis
 ):
     """Spec: SCRIPT-3."""
-    counter = f"{key_prefix}:runs"
-    client = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
-    script = Script(client, _COUNT_RUNS)
-    await script.run([counter], ["warm-up"])  # loads the script, so no reply is lost as NOSCRIPT
-    proxy.drop_replies_of_open_connections()
+    script, counter = await script_on_lossy_link(3)
 
     await script.run([counter], ["run"])
 

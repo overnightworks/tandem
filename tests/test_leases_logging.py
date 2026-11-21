@@ -87,9 +87,10 @@ async def main(url, prefix):
     await WakeChannel(client, key_prefix=prefix).publish("orders/7")
     await client.aclose()
 
-asyncio.run(main(*sys.argv[1:]))
 root = logging.getLogger()
-print(structlog.is_configured(), len(root.handlers), root.level)
+before = (list(root.handlers), root.level)
+asyncio.run(main(*sys.argv[1:]))
+print(structlog.is_configured(), (list(root.handlers), root.level) == before)
 """
 
 
@@ -115,4 +116,4 @@ async def test_using_tandem_configures_neither_logline_nor_structlog_nor_the_roo
             await process.wait()
 
     assert process.returncode == 0
-    assert stdout.decode().split() == ["False", "0", str(logging.WARNING)]
+    assert stdout.decode().split() == ["False", "True"]

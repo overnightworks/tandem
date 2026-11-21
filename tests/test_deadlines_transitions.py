@@ -72,6 +72,21 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
     assert before + 60_000 <= waiting[1] <= after + 60_000
 
 
+async def test_a_set_the_client_runs_again_invalidates_the_claim_another_pod_took_in_between(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+):
+    """Spec: DEADLINE-12."""
+    client = make_client(redis_url)
+    first_pod = new_deadlines(client)
+    other_pod = new_deadlines(make_client(redis_url))
+    await first_pod.set("room-1", timedelta(0))
+    (claimed,) = await claim_when_due(other_pod)
+
+    await first_pod.set("room-1", timedelta(0))
+
+    assert await other_pod.done(claimed) is False
+
+
 async def test_a_stale_extend_after_a_superseding_set_leaves_the_new_due_untouched(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
