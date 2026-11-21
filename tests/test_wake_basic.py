@@ -292,8 +292,8 @@ async def test_channels_of_distinct_prefixes_on_one_redis_never_hear_each_other(
         ]
 
 
-async def _next_message(tap: PubSub) -> dict[str, bytes]:
-    while (message := await tap.get_message(ignore_subscribe_messages=True, timeout=1)) is None:
+async def _next_message(tap: PubSub, message_type: str) -> dict[str, bytes]:
+    while (message := await tap.get_message(timeout=1)) is None or message["type"] != message_type:
         pass
     return message
 
@@ -306,8 +306,9 @@ async def test_a_wake_on_a_channel_of_another_version_segment_reaches_no_reader(
     foreign_channel = f"{key_prefix}:foreign-version:wake"
     async with publisher.pubsub() as tap:
         await tap.subscribe(wake_channel(key_prefix))
+        await within(_next_message(tap, "subscribe"))
         await WakeChannel(publisher, key_prefix=key_prefix).publish("foreign")
-        message = await within(_next_message(tap))
+        message = await within(_next_message(tap, "message"))
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
 
