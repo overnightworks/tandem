@@ -108,7 +108,7 @@ again and an `on_resync` call precedes the next wake; a readable payload that is
 existing subscription, without one.
 
 [LAYOUT-12] The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`.
-[LAYOUT-13] These keys are disjoint from the channel and from every other kind. `claim_for` is the same for every pod of one kind. [DEADLINE-11] A claim whose
+[LAYOUT-13] These keys are disjoint from the channel and from every other kind. [DEADLINE-11] A claim whose
 reply is lost to a retry of the host's client expires after `claim_for` and then reaches a worker again. [DEADLINE-12] A `set` or `cancel` that the client's `Retry` runs again cannot tell a replay from a new operation: if another pod re-armed the key in between, a replayed `cancel` removes the new deadline and a replayed `set` overwrites its due time or invalidates its claim.
 
 ## What tandem logs
