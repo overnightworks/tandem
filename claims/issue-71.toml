@@ -1,8 +1,0 @@
-claim_id = "88c6e661ab024ebd9338257d37cf507c"
-agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
-role = "builder"
-base = "63f67fbd06037dc83651705c26d980e37225c2bb"
-branch = "claude/issue-71-each-reference-rule-carries-the-id-its-t"
-scope = ["docs/reference.md", "tests"]
-opened_commit = "3b2ec15fa3fbb740342b3b5a3f44c37dfb71110a"
-whole_reason = "One ID scheme spans the reference and the test docstrings that cite it, so both land together."
