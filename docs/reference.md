@@ -171,9 +171,15 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    handler that pauses past its claim runs beside the next worker after a takeover. The host checks and
    writes its effect against a version or generation of its own, in one atomic step of its own store, so the
    older handler's effect is refused.
-3. **Reconcile the deadlines after a Redis restart, because what they guard is the host's durable state.** A
-   restart takes every pending deadline and every claim with it. The host derives the deadlines its durable
-   state needs and `set`s them again at start and after it notices a restart, for example at an `on_resync` call.
+3. **Reconcile the deadlines after a Redis restart, because what they guard is the host's durable state and only
+   the host knows which to `set` again.** On the platform's Redis (no persistence, `noeviction`, one replica) a
+   data loss is a restart, which drops every connection, so `following` calls `on_resync` before any wake it
+   covers ([WAKE-26]): tandem notices the loss, the host acts on it. A restart takes every pending deadline and
+   every claim with it. The host derives the deadlines its durable state needs and `set`s them again at start,
+   at `on_resync` and at its periodic idempotent reconcile, which stays. A `set` voids a live claim
+   ([DEADLINE-4]), so a re-set at every `on_resync` runs an in-flight handler again, under the host's fence
+   (duty 2). The limits: a `FLUSHALL` on an open subscription drops no connection, so no `on_resync` follows,
+   and a host without a wake channel has no `on_resync` at all; the reconcile period alone repairs both.
 4. **One `kept` per holder, because what "alive" means for a holder is the host's own meaning.** Several pods
    may renew one holder when "any of them is alive" is the intended meaning: `renew` is atomic, and the lease
    then cannot tell them apart. A `kept` ends the shared generation at its exit, so only one pod runs it.
@@ -182,10 +188,15 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    leases and claims by their own span.
 6. **Fence a lease's effects with its generation, compared inside the host's own atomic write.** Only the
    host's store can refuse the stale effect; a generation is random and compared only by equality.
-7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state.** A restart takes
-   every lease, lapse and claim with it: a lapse in flight is never delivered, and an absent lease reads
-   UNKNOWN for `lasts` and then GONE. The host re-derives what it must free from its durable state, at its
-   reconcile period, and reads GONE as the signal that nobody renews.
+7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state and only the host
+   knows what to free.** A restart takes every lease, lapse and claim with it: a lapse in flight is never
+   delivered, and an absent lease reads UNKNOWN until `lasts` have passed since the app's epoch and then GONE
+   ([LEASE-8]); `leases.live` returns a roster that is not `settled` for the same span ([LEASE-10]), and
+   `locks.acquire` returns None ([LOCK-4]) and `locks.state` reads UNKNOWN ([LOCK-8]). tandem notices the loss
+   through `on_resync` ([WAKE-26]); the host re-derives what it must free from its durable state at
+   `on_resync` and at its periodic idempotent reconcile, and reads GONE as the signal that nobody renews. The
+   limits are those of duty 3: a `FLUSHALL` on an open subscription and a host without a wake channel are
+   repaired only by the reconcile period.
 8. **Keep the generation and stop at the first `extend` or `release` that returns False, because the work under
    the lock is the host's own.** The lock is then lost or ended, and whoever kept working under it fences its
    effects with the generation, as in duty 6. A reply lost under the client's `Retry` is replayed as
