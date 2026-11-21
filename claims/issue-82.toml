@@ -1,7 +1,0 @@
-claim_id = "a376c8377d6545da9b2cccdfe4064784"
-agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
-role = "builder"
-base = "ac2b961e31009a218b3a966838a8d787c99ec195"
-branch = "claude/issue-82-the-host-duties-name-tandem-s-restart-no"
-scope = ["docs/reference.md"]
-opened_commit = "bbde420a961efb074fbfd2ee520232e6657169cb"
