@@ -107,7 +107,12 @@ async def test_using_tandem_configures_neither_logline_nor_structlog_nor_the_roo
         stdout=asyncio.subprocess.PIPE,
     )
 
-    stdout, _ = await within(process.communicate())
+    try:
+        stdout, _ = await within(process.communicate())
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
 
     assert process.returncode == 0
     assert stdout.decode().split() == ["False", "0", str(logging.WARNING)]

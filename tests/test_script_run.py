@@ -163,10 +163,7 @@ async def test_a_script_that_fails_after_a_write_keeps_the_write(
 _COUNT_RUNS = "if ARGV[1] == 'warm-up' then return 0 end\nreturn redis.call('INCR', KEYS[1])"
 
 
-@pytest.mark.parametrize(("retries", "runs"), [(0, 1), (3, 2)])
-async def test_the_clients_retry_alone_runs_a_script_again_after_a_lost_reply(
-    retries: int,
-    runs: int,
+async def test_a_client_without_retries_raises_after_a_lost_reply_and_the_script_ran_once(
     proxy: TcpProxy,
     make_client: Callable[..., Redis],
     observer: Redis,
@@ -174,18 +171,33 @@ async def test_the_clients_retry_alone_runs_a_script_again_after_a_lost_reply(
 ):
     """Spec: SCRIPT-3."""
     counter = f"{key_prefix}:runs"
-    client = make_client(proxy.url, retry=Retry(NoBackoff(), retries), socket_timeout=0.3)
+    client = make_client(proxy.url, retry=Retry(NoBackoff(), 0), socket_timeout=0.3)
     script = Script(client, _COUNT_RUNS)
     await script.run([counter], ["warm-up"])  # loads the script, so no reply is lost as NOSCRIPT
     proxy.drop_replies_of_open_connections()
 
-    if retries == 0:
-        with pytest.raises(StoreError):
-            await script.run([counter], ["run"])
-    else:
+    with pytest.raises(StoreError):
         await script.run([counter], ["run"])
 
-    assert int(await observer.get(counter) or 0) == runs
+    assert int(await observer.get(counter) or 0) == 1
+
+
+async def test_a_client_with_retries_runs_the_script_twice_after_a_lost_reply(
+    proxy: TcpProxy,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    key_prefix: str,
+):
+    """Spec: SCRIPT-3."""
+    counter = f"{key_prefix}:runs"
+    client = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
+    script = Script(client, _COUNT_RUNS)
+    await script.run([counter], ["warm-up"])  # loads the script, so no reply is lost as NOSCRIPT
+    proxy.drop_replies_of_open_connections()
+
+    await script.run([counter], ["run"])
+
+    assert int(await observer.get(counter) or 0) == 2
 
 
 async def test_an_error_in_a_script_is_reported_at_a_line_offset_by_the_kit(
