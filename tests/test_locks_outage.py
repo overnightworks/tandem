@@ -26,6 +26,7 @@ async def test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as
     make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
 ):
+    """Spec: STORE-1."""
     cut = new_locks(make_client(proxy.url, retry=Retry(NoBackoff(), 0)))
     refused = new_locks(make_client(await url_denying("evalsha")))
     proxy.cut()

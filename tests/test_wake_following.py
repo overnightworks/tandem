@@ -58,6 +58,7 @@ class Handlers:
 
 
 async def test_entry_returns_after_the_first_resync_was_handled(wake: WakeBackend):
+    """Spec: WAKE-8, TESTING-3."""
     handlers = Handlers()
 
     async with handlers.following(wake.new_channel()):
@@ -67,6 +68,7 @@ async def test_entry_returns_after_the_first_resync_was_handled(wake: WakeBacken
 async def test_entry_raises_an_outage_when_the_subscription_is_not_confirmed_in_time(
     wake: WakeBackend,
 ):
+    """Spec: WAKE-9, TESTING-3."""
     handlers = Handlers()
     channel = wake.unconfirmable_channel()
     tasks_before = asyncio.all_tasks()
@@ -84,6 +86,7 @@ async def test_entry_raises_an_outage_when_the_subscription_is_not_confirmed_in_
 async def test_a_handler_exception_before_the_entry_returns_raises_out_of_the_entry(
     wake: WakeBackend,
 ):
+    """Spec: WAKE-14, TESTING-3."""
     handlers = Handlers()
     handlers.raise_in_resync = RuntimeError("boom")
     following = handlers.following(wake.new_channel())
@@ -96,6 +99,7 @@ async def test_a_handler_exception_before_the_entry_returns_raises_out_of_the_en
 
 
 async def test_a_refusal_before_the_entry_returns_raises_out_of_the_entry(wake: WakeBackend):
+    """Spec: WAKE-14, TESTING-3."""
     handlers = Handlers()
     channel = await wake.refusable_channel()
     await wake.refuse(channel)
@@ -110,6 +114,7 @@ async def test_a_refusal_before_the_entry_returns_raises_out_of_the_entry(wake: 
 
 
 async def test_a_wake_is_handled_inside_the_trace_of_its_sender(wake: WakeBackend):
+    """Spec: WAKE-12, LOG-24, TESTING-3."""
     handlers = Handlers()
     channel = wake.new_channel()
     async with handlers.following(channel):
@@ -124,6 +129,7 @@ async def test_a_wake_is_handled_inside_the_trace_of_its_sender(wake: WakeBacken
 
 
 async def test_wakes_are_handled_one_at_a_time_in_arrival_order(wake: WakeBackend):
+    """Spec: WAKE-13, TESTING-3."""
     handlers = Handlers()
     channel = wake.new_channel()
     addresses = [str(number) for number in range(20)]
@@ -136,6 +142,7 @@ async def test_wakes_are_handled_one_at_a_time_in_arrival_order(wake: WakeBacken
 
 
 async def test_a_wake_reaches_every_pod_that_follows_the_publisher_included(wake: WakeBackend):
+    """Spec: WAKE-20, TESTING-3."""
     publisher = wake.new_channel()
     other = wake.new_channel()
     on_publisher, on_other = Handlers(), Handlers()
@@ -146,6 +153,7 @@ async def test_a_wake_reaches_every_pod_that_follows_the_publisher_included(wake
 
 
 async def test_a_wake_published_after_the_exit_is_not_handled(wake: WakeBackend):
+    """Spec: WAKE-17, TESTING-3."""
     leaving, witness = Handlers(), Handlers()
     channel = wake.new_channel()
     async with witness.following(wake.new_channel()):
@@ -158,6 +166,7 @@ async def test_a_wake_published_after_the_exit_is_not_handled(wake: WakeBackend)
 
 
 async def test_a_confirmation_after_the_entry_calls_on_resync_again(wake: WakeBackend):
+    """Spec: WAKE-11, TESTING-3."""
     handlers = Handlers()
     channel = wake.new_channel()
     async with handlers.following(channel):
@@ -171,6 +180,7 @@ async def test_a_confirmation_after_the_entry_calls_on_resync_again(wake: WakeBa
 async def test_a_handler_exception_after_the_entry_ends_the_follow_with_one_line_and_one_on_failed(
     failing_handler: str, wake: WakeBackend, log_lines: LogLines
 ):
+    """Spec: WAKE-15, LOG-16, TESTING-3."""
     handlers = Handlers()
     witness = Handlers()
     secret = "address-the-handler-choked-on"
@@ -198,6 +208,7 @@ async def test_a_handler_exception_after_the_entry_ends_the_follow_with_one_line
 async def test_a_refusal_after_the_entry_ends_the_follow_with_store_error_instead_of_a_retry(
     wake: WakeBackend, log_lines: LogLines
 ):
+    """Spec: WAKE-15, WAKE-27, TESTING-3."""
     handlers = Handlers()
     channel = await wake.refusable_channel()
     async with handlers.following(channel):
@@ -245,6 +256,7 @@ async def _publish_and_await_failure(channel: Channel, handlers: Handlers) -> No
 
 
 async def test_an_on_failed_that_raises_is_raised_out_of_the_exit(wake: WakeBackend):
+    """Spec: WAKE-16, TESTING-3."""
     handlers = Handlers()
     handlers.raise_in_wake = RuntimeError("the handler")
     handlers.raise_in_failed = ValueError("the host's own error")
@@ -260,6 +272,7 @@ async def test_an_on_failed_that_raises_is_raised_out_of_the_exit(wake: WakeBack
 async def test_a_ready_within_that_is_no_positive_timedelta_is_refused_naming_the_argument(
     ready_within: object, wake: WakeBackend
 ):
+    """Spec: WAKE-10, TESTING-3."""
     handlers = Handlers()
     following = handlers.following(wake.new_channel(), ready_within=ready_within)  # type: ignore[arg-type]
 
@@ -286,6 +299,7 @@ class _WakeBufferedWithTheFirstConfirmation(WakeChannel):
 async def test_a_wake_buffered_with_the_first_confirmation_is_handled_after_the_entry_returned(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
+    """Spec: WAKE-8, WAKE-13."""
     handlers = Handlers()
     handlers.raise_in_wake = RuntimeError("boom")
     channel = _WakeBufferedWithTheFirstConfirmation(make_client(redis_url), key_prefix=key_prefix)

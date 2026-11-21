@@ -48,6 +48,7 @@ async def test_cancelling_while_reading_unsubscribes_and_closes_the_connection(
     key_prefix: str,
     redis_url: str,
 ):
+    """Spec: WAKE-17."""
     tasks_before = asyncio.all_tasks()
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
@@ -62,6 +63,7 @@ async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
     key_prefix: str,
     held_backoffs: Backoffs,
 ):
+    """Spec: WAKE-17."""
     tasks_before = asyncio.all_tasks()
     client = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=held_backoffs)
@@ -81,6 +83,8 @@ async def test_a_handler_failure_leaves_no_subscriber_no_connection_and_no_task(
     key_prefix: str,
     redis_url: str,
 ):
+    """Spec: WAKE-15, WAKE-17."""
+
     def fail(*_: object) -> None:
         raise RuntimeError("the handler failed")
 

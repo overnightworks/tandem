@@ -17,6 +17,7 @@ LASTS = timedelta(milliseconds=300)
 async def test_concurrent_acquires_of_an_absent_name_give_exactly_one_a_generation(
     redis_url: str, make_client: Callable[..., Redis], new_locks: Callable[..., Locks]
 ):
+    """Spec: LOCK-3."""
     pods = [new_locks(make_client(redis_url)) for _ in range(8)]
 
     results = await asyncio.gather(*(pod.acquire("gpu-0") for pod in pods))
@@ -33,6 +34,7 @@ async def test_the_live_holder_acquiring_again_gets_none_and_its_expiry_stays(
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LOCK-3."""
     locks = new_locks(make_client(redis_url))
     generation = await locks.acquire("gpu-0")
     expiry = await expiry_of(observer, key_prefix, "gpu-0")
@@ -50,6 +52,7 @@ async def test_extending_moves_the_expiry_only_for_the_current_generation(
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LOCK-5."""
     client = make_client(redis_url)
     locks = new_locks(client)
     generation = await locks.acquire("gpu-0")
@@ -68,6 +71,7 @@ async def test_extending_moves_the_expiry_only_for_the_current_generation(
 async def test_extending_after_the_expiry_returns_false_and_a_later_acquire_gets_a_new_generation(
     redis_url: str, make_client: Callable[..., Redis], new_locks: Callable[..., Locks]
 ):
+    """Spec: LOCK-5."""
     client = make_client(redis_url)
     locks = new_locks(client, lasts=LASTS)
     generation = await locks.acquire("gpu-0")
@@ -85,6 +89,7 @@ async def test_extending_after_the_expiry_returns_false_and_a_later_acquire_gets
 async def test_releasing_the_current_generation_frees_the_name_and_a_stale_one_keeps_the_lock(
     redis_url: str, make_client: Callable[..., Redis], new_locks: Callable[..., Locks]
 ):
+    """Spec: LOCK-6."""
     locks = new_locks(make_client(redis_url))
     first = await locks.acquire("gpu-0")
     assert first is not None
@@ -101,6 +106,7 @@ async def test_releasing_the_current_generation_frees_the_name_and_a_stale_one_k
 async def test_state_reads_alive_with_the_generation_and_the_time_left_and_gone_when_free(
     redis_url: str, make_client: Callable[..., Redis], new_locks: Callable[..., Locks]
 ):
+    """Spec: LOCK-8."""
     locks = new_locks(make_client(redis_url), lasts=timedelta(seconds=30))
     assert await locks.state("gpu-0") == LockState(Liveness.GONE, None, None)
 
@@ -120,6 +126,7 @@ async def test_state_reads_unknown_right_after_a_wipe_and_gone_once_lasts_have_p
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LOCK-8."""
     client = make_client(redis_url)
     locks = new_locks(client, lasts=LASTS)
     await wipe(observer, key_prefix)
@@ -142,6 +149,7 @@ async def test_later_acquires_shrink_the_structures_of_names_that_expired_unacqu
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LAYOUT-6."""
     client = make_client(redis_url)
     locks = new_locks(client, lasts=LASTS)
     keys = lock_keys(key_prefix, FAMILY)

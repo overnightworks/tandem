@@ -11,6 +11,7 @@ from tests.support.slots import FAMILY, take_hold_left_expired_beside_a_live_one
 async def test_release_frees_every_pool_of_the_hold_and_a_second_release_returns_false(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-7."""
     slots = new_slots(backend.new_client())
     token = await slots.take({"global": 1, "person-a": 1})
     assert token is not None
@@ -25,6 +26,7 @@ async def test_release_frees_every_pool_of_the_hold_and_a_second_release_returns
 async def test_releasing_an_unknown_token_returns_false_and_changes_nothing(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-7."""
     slots = new_slots(backend.new_client())
     token = await slots.take({"person-a": 1})
     assert token is not None
@@ -42,6 +44,7 @@ async def test_releasing_an_expired_but_unpruned_hold_returns_false_and_removes_
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: SLOT-7."""
     client = make_client(redis_url)
     slots = new_slots(client)
     expired = await take_hold_left_expired_beside_a_live_one(

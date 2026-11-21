@@ -24,6 +24,7 @@ from tests.support.deadlines import claim_when_due
 def test_a_kind_or_prefix_that_is_no_segment_fails_at_construction_naming_the_argument(
     backend: Backend, argument: str, value: str
 ):
+    """Spec: DEADLINE-1."""
     arguments = {"key_prefix": "skat", "kind": "work", argument: value}
     client = backend.new_client()
     claim_for = timedelta(seconds=1)
@@ -36,6 +37,7 @@ def test_a_kind_or_prefix_that_is_no_segment_fails_at_construction_naming_the_ar
 def test_a_claim_that_is_no_positive_timedelta_fails_at_construction_naming_the_argument(
     backend: Backend, claim_for: timedelta | int
 ):
+    """Spec: DEADLINE-1."""
     client = backend.new_client()
 
     with pytest.raises(ValueError, match="claim_for"):
@@ -49,6 +51,7 @@ async def test_kinds_named_like_the_fixed_tokens_share_a_prefix_with_a_wake_chan
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LAYOUT-13."""
     client = make_client(redis_url)
     kinds = ["wake", "epoch", "d", "l"]
     by_kind = {kind: new_deadlines(client, kind=kind) for kind in kinds}

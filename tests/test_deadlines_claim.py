@@ -16,6 +16,7 @@ SHORT_CLAIM = timedelta(milliseconds=300)
 async def test_a_deadline_is_claimed_once_with_a_fresh_token_and_not_before_it_is_due(
     backend: Backend, new_deadlines: Callable[..., Deadlines], decode_responses: bool
 ):
+    """Spec: DEADLINE-3, DEADLINE-6."""
     setter = new_deadlines(backend.new_client(decode_responses=decode_responses))
     claimer = new_deadlines(backend.new_client(decode_responses=decode_responses))
     clock = backend.new_client()
@@ -34,6 +35,7 @@ async def test_a_deadline_is_claimed_once_with_a_fresh_token_and_not_before_it_i
 async def test_a_claim_that_runs_out_passes_the_key_to_another_claimer_and_voids_the_old_token(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: DEADLINE-6, DEADLINE-9."""
     client = make_client(redis_url)
     first = new_deadlines(client, claim_for=SHORT_CLAIM)
     second = new_deadlines(make_client(redis_url), claim_for=SHORT_CLAIM)
@@ -55,6 +57,7 @@ async def test_a_claim_that_runs_out_passes_the_key_to_another_claimer_and_voids
 async def test_a_claim_that_is_extended_keeps_the_key_from_other_claimers(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: DEADLINE-8."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client, claim_for=timedelta(seconds=30))
     await deadlines.set("room-1", timedelta(0))
@@ -73,6 +76,7 @@ async def test_a_claim_that_is_extended_keeps_the_key_from_other_claimers(
 async def test_claim_due_takes_at_most_the_limit_each_under_a_distinct_token_and_leaves_the_rest(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: DEADLINE-6."""
     deadlines = new_deadlines(make_client(redis_url))
     keys = [f"room-{number}" for number in range(5)]
     for key in keys:
@@ -96,6 +100,7 @@ async def test_claim_due_without_room_for_a_claim_fails_loud(
     new_deadlines: Callable[..., Deadlines],
     limit: int,
 ):
+    """Spec: DEADLINE-7."""
     deadlines = new_deadlines(backend.new_client())
 
     with pytest.raises(ValueError, match="limit"):

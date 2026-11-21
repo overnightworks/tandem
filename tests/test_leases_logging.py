@@ -28,6 +28,7 @@ async def test_every_lease_call_the_host_awaits_writes_one_line_with_its_outcome
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-3, LOG-4, LOG-18, LOG-21."""
     call, holder = _LEASE_CALLS[event]
     refused = new_leases(make_client(await url_denying("evalsha")))
 
@@ -57,6 +58,7 @@ async def test_a_host_with_only_a_standard_handler_gets_the_lines_at_its_level_w
     new_leases: Callable[..., Leases],
     caplog: pytest.LogCaptureFixture,
 ):
+    """Spec: LOG-1."""
     with caplog.at_level(level, logger="tandem"):
         await new_leases(make_client(redis_url)).renew(_HOLDER)
 

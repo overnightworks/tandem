@@ -82,6 +82,7 @@ async def _exiting_at_its_gate(
 async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-11."""
     leases = new_leases(make_client(redis_url), lasts=LASTS)
 
     async with leases.kept("pod-a", every=EVERY) as hold:
@@ -97,6 +98,7 @@ async def test_kept_renews_while_its_body_runs_and_writes_no_line_for_a_renewal_
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LEASE-11, LOG-19."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS)
 
@@ -113,6 +115,7 @@ async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
+    """Spec: LEASE-14."""
     leases = new_leases(make_client(url_with_wrong_password), lasts=LASTS)
 
     held = leases.kept("pod-a", every=EVERY)
@@ -131,6 +134,7 @@ async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_r
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LEASE-14, LOG-8."""
     holder_pod = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
     observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
 
@@ -156,6 +160,7 @@ async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_tra
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LEASE-14, LOG-8."""
     leases = new_leases(
         make_client(proxy.url, retry=Retry(NoBackoff(), 0)),
         lasts=LASTS,
@@ -183,6 +188,7 @@ async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_tra
 async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_the_first_back_off(
     proxy: TcpProxy, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-14."""
     every = timedelta(seconds=BACKOFF_FIRST_SECONDS * 1.6)
     leases = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=2 * every)
     clock = asyncio.get_running_loop()
@@ -204,6 +210,7 @@ async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
+    """Spec: LEASE-12."""
     paused_pod = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS)
     observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
 
@@ -229,6 +236,7 @@ async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
 async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_good(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
+    """Spec: LEASE-15."""
     client = make_client(redis_url)
     leases = _GatedLeases(
         client,
@@ -263,6 +271,7 @@ async def test_an_uncancelled_exit_writes_lease_end_ended_like_a_direct_end(
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: LEASE-15, LOG-19."""
     leases = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
 
     async def hold_then_exit() -> None:
@@ -293,6 +302,7 @@ async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_pr
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: LEASE-15."""
     leases, task = await _exiting_at_its_gate(
         make_client(await url_denying("flushall")), key_prefix
     )
@@ -320,6 +330,7 @@ async def test_cancelling_the_exit_and_its_cleanup_together_ends_the_task_cancel
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: LEASE-15, LOG-9."""
     earlier = asyncio.all_tasks()
     _, task = await _exiting_at_its_gate(make_client(redis_url), key_prefix)
     for started_since in asyncio.all_tasks() - earlier:

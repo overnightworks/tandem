@@ -66,6 +66,7 @@ async def test_every_message_of_the_replacement_subscription_follows_its_resubsc
     key_prefix: str,
     backoffs: Backoffs,
 ):
+    """Spec: WAKE-11, WAKE-26."""
     reader_client = make_client(proxy.url, retry=disruption.retry)
     reader_channel = BackoffRecordingChannel(
         reader_client, key_prefix=key_prefix, backoffs=backoffs

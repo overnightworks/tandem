@@ -17,6 +17,7 @@ LASTS = timedelta(milliseconds=LASTS_MS)
 async def test_a_renewal_after_a_redis_restart_starts_a_lease_with_another_generation(
     restartable_redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-5."""
     client = make_client(restartable_redis_url)
     leases = new_leases(client)
     before = await leases.renew("pod-a")
@@ -31,6 +32,7 @@ async def test_a_renewal_after_a_redis_restart_starts_a_lease_with_another_gener
 async def test_after_a_redis_restart_an_absent_lease_reads_unknown_for_lasts_then_gone(
     restartable_redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-8."""
     client = make_client(restartable_redis_url)
     leases = new_leases(client, lasts=LASTS)
     await leases.renew("pod-a")
@@ -54,6 +56,7 @@ async def test_only_state_reads_after_a_wipe_read_unknown_until_lasts_passed_sin
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-8."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS)
     await wipe(observer, key_prefix, "owner")
@@ -79,6 +82,7 @@ async def test_state_renew_and_the_sweep_each_create_the_epoch_in_their_own_scri
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LUA-2."""
     leases = new_leases(make_client(redis_url))
     epoch = lease_keys(key_prefix, "owner").epoch
 
@@ -105,6 +109,7 @@ async def test_live_reads_unsettled_right_after_a_wipe_and_settled_with_the_hold
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-10."""
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     await wipe(observer, key_prefix, "owner")
 

@@ -31,6 +31,7 @@ async def _reader_connection_ids(observer: Redis, key_prefix: str) -> list[int]:
 async def test_a_killed_subscription_is_resubscribed_once_and_wakes_continue(
     redis_url: str, make_client: Callable[..., Redis], observer: Redis, key_prefix: str
 ):
+    """Spec: WAKE-11, WAKE-26."""
     channel = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(channel) as reader:
@@ -48,7 +49,10 @@ async def test_a_killed_subscription_is_resubscribed_once_and_wakes_continue(
 async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
     proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str, redis_url: str
 ):
-    """redis-py's own re-subscription confirms through the reader, so tandem adds no copy of it."""
+    """redis-py's own re-subscription confirms through the reader, so tandem adds no copy of it.
+
+    Spec: WAKE-26.
+    """
     retry = Retry(ConstantBackoff(0.05), 100)
     client = make_client(proxy.url, retry=retry)
     pool, connection_settings = (
@@ -84,6 +88,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
     backoffs: Backoffs,
     log_lines: LogLines,
 ):
+    """Spec: WAKE-26, LOG-14, LOG-15."""
     client = make_client(proxy.url, retry=Retry(NoBackoff(), 1))
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=backoffs)
@@ -123,6 +128,7 @@ async def test_an_outage_beyond_the_retry_budget_ends_in_one_resubscribed_with_c
 async def test_a_redis_restart_is_resubscribed_once_and_wakes_continue(
     restartable_redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
+    """Spec: WAKE-26."""
     client = make_client(restartable_redis_url)
     channel = WakeChannel(client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
@@ -143,6 +149,7 @@ async def test_state_changed_while_disconnected_is_read_again_at_the_next_resync
     redis_url: str,
     observer: Redis,
 ):
+    """Spec: WAKE-11."""
     writer_client = make_client(redis_url)
     reader_client = make_client(proxy.url, retry=Retry(ConstantBackoff(0.05), 100))
     channel = WakeChannel(reader_client, key_prefix=key_prefix)
@@ -163,7 +170,7 @@ async def test_state_changed_while_disconnected_is_read_again_at_the_next_resync
 
 
 async def test_two_reader_processes_both_get_the_wake_of_a_third(redis_url: str, key_prefix: str):
-
+    """Spec: WAKE-20."""
     started: list[asyncio.subprocess.Process] = []
 
     async def start(command: str, *address: str) -> asyncio.subprocess.Process:

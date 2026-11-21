@@ -20,6 +20,7 @@ async def test_a_family_named_like_a_fixed_key_shares_no_key_and_meets_no_wrongt
     key_prefix: str,
     name: str,
 ):
+    """Spec: LAYOUT-2."""
     client = make_client(redis_url)
     leases = new_leases(client, family=name, lasts=LASTS)
     deadlines = new_deadlines(client, kind=name)
@@ -63,6 +64,7 @@ def test_a_lasts_or_claim_for_that_is_no_positive_timedelta_fails_loud(
     argument: str,
     value: object,
 ):
+    """Spec: LEASE-2."""
     options = {"lasts": timedelta(seconds=30), "claim_for": timedelta(seconds=30)}
     client = make_client(redis_url)
 
@@ -80,6 +82,7 @@ def test_an_every_that_is_not_positive_or_not_below_lasts_fails_loud(
     redis_url: str,
     every: object,
 ):
+    """Spec: LEASE-13."""
     leases = new_leases(make_client(redis_url), lasts=timedelta(seconds=30))
 
     with pytest.raises(ValueError, match="every"):
