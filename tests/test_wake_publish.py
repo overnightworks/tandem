@@ -25,6 +25,7 @@ async def _publisher_through(
 async def test_a_publish_that_never_reaches_redis_fails_and_wakes_nobody(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
+    """Spec: WAKE-6."""
     publisher = await _publisher_through(proxy, make_client, key_prefix)
     direct = make_client(redis_url)
     host = ScenarioHost(direct, key_prefix)
@@ -46,6 +47,7 @@ async def test_a_publish_that_never_reaches_redis_fails_and_wakes_nobody(
 async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wakes_again(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
+    """Spec: WAKE-4, WAKE-6."""
     publisher = await _publisher_through(proxy, make_client, key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
@@ -64,6 +66,7 @@ async def test_a_publish_whose_reply_is_lost_fails_yet_wakes_and_a_republish_wak
 async def test_a_publish_whose_reply_is_lost_is_sent_again_under_the_clients_retry(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
+    """Spec: WAKE-4."""
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
     await retrying.ping()
     publisher = WakeChannel(retrying, key_prefix=key_prefix)
@@ -85,6 +88,7 @@ async def test_a_publish_whose_reply_is_lost_is_sent_again_under_the_clients_ret
 async def test_a_publish_whose_replies_are_all_lost_fails_once_the_clients_retry_gives_up(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
+    """Spec: WAKE-6."""
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 2), socket_timeout=0.3)
     await retrying.ping()
     publisher = WakeChannel(retrying, key_prefix=key_prefix)
@@ -110,6 +114,7 @@ async def test_a_publish_writes_one_line_in_the_hosts_trace_whether_it_succeeds_
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: LOG-7."""
     accepted = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     refused = WakeChannel(make_client(await url_denying("publish")), key_prefix=key_prefix)
 

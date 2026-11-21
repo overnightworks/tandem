@@ -22,6 +22,7 @@ async def test_a_script_writes_a_deadline_and_a_wake_that_are_visible_together(
     new_deadlines: Callable[..., Deadlines],
     key_prefix: str,
 ):
+    """Spec: DEADLINE-10, LUA-7."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
@@ -50,6 +51,7 @@ async def test_a_script_wakes_with_the_trace_it_is_given_or_none(
     make_client: Callable[..., Redis],
     key_prefix: str,
 ):
+    """Spec: WAKE-24, LUA-7."""
     client = make_client(redis_url)
     script = Script(client, "return tandem.wake(ARGV[1], ARGV[2], ARGV[3])")
     arguments: list[str | int | bytes] = [wake_channel(key_prefix), address]
@@ -96,6 +98,7 @@ async def test_a_script_that_fails_before_its_first_write_leaves_neither_deadlin
 async def test_a_script_runs_again_after_the_servers_script_cache_is_flushed(
     restartable_redis_url: str, make_client: Callable[..., Redis]
 ):
+    """Spec: SCRIPT-1."""
     client = make_client(restartable_redis_url)
     script = Script(client, "return 7")
     assert await script.run([], []) == 7
@@ -108,6 +111,7 @@ async def test_a_script_runs_again_after_the_servers_script_cache_is_flushed(
 async def test_a_script_that_redis_refuses_raises_store_error(
     url_denying: Callable[[str], Awaitable[str]], make_client: Callable[..., Redis]
 ):
+    """Spec: SCRIPT-2."""
     script = Script(make_client(await url_denying("evalsha")), "return 7")
 
     with pytest.raises(StoreError):
@@ -117,6 +121,7 @@ async def test_a_script_that_redis_refuses_raises_store_error(
 async def test_a_script_whose_reply_never_comes_raises_store_error(
     proxy: TcpProxy, make_client: Callable[..., Redis]
 ):
+    """Spec: SCRIPT-2."""
     client = make_client(proxy.url, retry=Retry(NoBackoff(), 0), socket_timeout=0.3)
     await client.ping()
     script = Script(client, "return 7")

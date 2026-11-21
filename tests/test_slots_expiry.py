@@ -18,6 +18,7 @@ async def test_a_hold_frees_its_slot_on_redis_time_and_the_family_key_goes_with_
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LAYOUT-10."""
     slots = new_slots(make_client(redis_url), lasts=LASTS)
     assert await slots.take({"person-a": 1}) is not None
     assert await slots.take({"person-a": 1}) is None
@@ -55,6 +56,7 @@ async def test_a_take_frees_the_expired_hold_while_a_later_live_hold_keeps_the_f
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LAYOUT-10."""
     client = make_client(redis_url)
     slots = new_slots(client)
     expired = await take_hold_left_expired_beside_a_live_one(

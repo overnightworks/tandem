@@ -11,6 +11,7 @@ from tests.support.backends import Backend
 async def test_takes_up_to_the_cap_succeed_and_the_next_returns_none(
     backend: Backend, new_slots: Callable[..., Slots], cap: int
 ):
+    """Spec: SLOT-3."""
     slots = new_slots(backend.new_client())
 
     tokens = [await slots.take({"person-a": cap}) for _ in range(cap)]
@@ -21,6 +22,7 @@ async def test_takes_up_to_the_cap_succeed_and_the_next_returns_none(
 
 
 async def test_a_cap_of_zero_refuses_every_take(backend: Backend, new_slots: Callable[..., Slots]):
+    """Spec: SLOT-5."""
     slots = new_slots(backend.new_client())
 
     assert await slots.take({"person-a": 0}) is None
@@ -30,6 +32,7 @@ async def test_a_cap_of_zero_refuses_every_take(backend: Backend, new_slots: Cal
 async def test_a_pool_another_pod_filled_refuses_this_pod(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-3."""
     first = new_slots(backend.new_client())
     second = new_slots(backend.new_client())
     assert await first.take({"person-a": 1}) is not None
@@ -40,6 +43,7 @@ async def test_a_pool_another_pod_filled_refuses_this_pod(
 async def test_a_full_global_pool_takes_nothing_from_the_persons_pool(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-3."""
     slots = new_slots(backend.new_client())
     other_persons = await slots.take({"global": 1, "person-b": 1})
     assert other_persons is not None
@@ -53,6 +57,7 @@ async def test_a_full_global_pool_takes_nothing_from_the_persons_pool(
 async def test_a_full_persons_pool_takes_nothing_from_the_global_pool(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-3."""
     slots = new_slots(backend.new_client())
     assert await slots.take({"global": 2, "person-a": 1}) is not None
 
@@ -65,6 +70,7 @@ async def test_a_full_persons_pool_takes_nothing_from_the_global_pool(
 async def test_concurrent_takes_behind_a_barrier_never_exceed_a_cap(
     backend: Backend, new_slots: Callable[..., Slots]
 ):
+    """Spec: SLOT-3."""
     cap, contenders = 3, 12
     pods = [new_slots(backend.new_client()) for _ in range(contenders)]
     barrier = asyncio.Barrier(contenders)

@@ -17,6 +17,7 @@ ENDING_LASTS = timedelta(seconds=2)
 async def test_concurrent_renewals_of_one_absent_holder_start_exactly_one_lease(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-5."""
     pods = [new_leases(make_client(redis_url)) for _ in range(8)]
 
     renewals = await asyncio.gather(*(pod.renew("pod-a") for pod in pods))
@@ -29,6 +30,7 @@ async def test_concurrent_renewals_of_one_absent_holder_start_exactly_one_lease(
 async def test_a_renewal_of_a_live_lease_keeps_its_generation_and_reads_alive(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-4."""
     leases = new_leases(make_client(redis_url))
 
     first = await leases.renew("pod-a")
@@ -42,6 +44,7 @@ async def test_a_renewal_of_a_live_lease_keeps_its_generation_and_reads_alive(
 async def test_the_state_of_no_holder_is_empty_without_a_round_trip(
     make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-9."""
     nowhere = make_client("redis://127.0.0.1:1")
 
     assert await new_leases(nowhere).state([]) == {}
@@ -50,6 +53,7 @@ async def test_the_state_of_no_holder_is_empty_without_a_round_trip(
 async def test_a_lapse_that_serve_lapses_claimed_reads_gone_and_a_renewal_starts_a_new_generation(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-5, LEASE-21."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS)
     old = await leases.renew("pod-a")
@@ -71,6 +75,7 @@ async def test_a_lapse_that_serve_lapses_claimed_reads_gone_and_a_renewal_starts
 async def test_ending_the_current_generation_removes_the_lease_and_a_stale_one_changes_nothing(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-6."""
     leases = new_leases(make_client(redis_url), lasts=ENDING_LASTS)
     first = await leases.renew("pod-a")
     handled = Handled()
@@ -91,6 +96,7 @@ async def test_ending_the_current_generation_removes_the_lease_and_a_stale_one_c
 async def test_an_expired_lease_reaches_a_handler_once_and_a_renewal_after_it_starts_again(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-5, LEASE-16."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS)
     old = await leases.renew("pod-a")
@@ -117,6 +123,7 @@ async def test_end_drops_the_holder_from_the_generation_record(
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-6."""
     leases = new_leases(make_client(redis_url), lasts=timedelta(seconds=30))
     generations = lease_keys(key_prefix, "owner").generation
     ended = await leases.renew("pod-ended")
@@ -135,6 +142,7 @@ async def test_the_sweep_drops_a_lapsed_holder_from_the_generation_record(
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-16."""
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     generations = lease_keys(key_prefix, "owner").generation
     await leases.renew("pod-lapsed")

@@ -52,6 +52,7 @@ async def test_the_lapse_of_a_killed_pod_reaches_one_handler_and_another_if_that
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-16."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=timedelta(seconds=2), claim_for=CLAIM_FOR)
     holder = await _start_process("renew", redis_url, key_prefix, "pod-a", "2000")
@@ -81,6 +82,7 @@ async def test_the_lapse_of_a_killed_pod_reaches_one_handler_and_another_if_that
 async def test_a_handler_that_runs_past_claim_for_keeps_its_lapse_from_others_and_done_follows(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-17, LEASE-18."""
     client = make_client(redis_url)
     first = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
     second = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
@@ -107,6 +109,7 @@ async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handl
     key_prefix: str,
     backoffs: Backoffs,
 ):
+    """Spec: LEASE-18, LEASE-20."""
     through_proxy = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
     serving_leases = BackoffRecordingLeases(
         through_proxy,
@@ -150,6 +153,7 @@ async def test_a_refusal_ends_serve_lapses_with_store_error(
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
+    """Spec: LEASE-20."""
     leases = new_leases(make_client(await url_denying("evalsha")))
     task = asyncio.create_task(leases.serve_lapses(Handled(), every=SERVING_EVERY))
 
@@ -163,6 +167,7 @@ async def test_every_lapse_of_a_mass_lapse_reaches_a_handler(
     new_leases: Callable[..., Leases],
     lapses: int,
 ):
+    """Spec: LEASE-16."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     holders = [f"pod-{number}" for number in range(lapses)]
     for holder in holders:
@@ -178,6 +183,7 @@ async def test_every_lapse_of_a_mass_lapse_reaches_a_handler(
 async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handled_once(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-17."""
     client = make_client(redis_url)
     first = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
     second = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
@@ -207,6 +213,7 @@ async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_lapse_is_han
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
+    """Spec: LEASE-20."""
     through_proxy = new_leases(
         make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
     )
@@ -228,6 +235,7 @@ async def test_a_claim_that_runs_out_leaves_the_handler_running(
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-17."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
@@ -248,6 +256,7 @@ async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
+    """Spec: LEASE-17."""
     client = make_client(redis_url)
     through_proxy = new_leases(
         make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
@@ -281,6 +290,7 @@ async def test_a_lapse_handling_writes_one_line_with_its_outcome(
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-10, LOG-18."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
 
@@ -345,6 +355,7 @@ async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-10."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
 
@@ -367,6 +378,7 @@ async def test_each_lapse_handling_runs_under_its_own_trace_that_ends_with_it(
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LEASE-19."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
     await leases.renew("pod-b")
@@ -387,6 +399,7 @@ async def test_a_round_writes_its_counts_at_info_with_work_and_at_debug_without(
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-11."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
     await leases.renew("pod-b")
@@ -420,6 +433,7 @@ async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-12."""
     await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
     leases = new_leases(
         make_client(await url_denying("flushall")), lasts=LASTS, claim_for=CLAIM_FOR
@@ -453,6 +467,7 @@ async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expir
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
+    """Spec: LOG-12, LOG-13."""
     await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
     leases = new_leases(
         make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
@@ -484,6 +499,7 @@ async def test_a_claim_that_runs_out_is_logged_without_its_generation(
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: LOG-13, LOG-22."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
     running = Handled(hold=True)
@@ -509,6 +525,7 @@ async def test_an_outage_is_logged_per_failed_round_and_a_refusal_writes_no_line
     backoffs: Backoffs,
     log_lines: LogLines,
 ):
+    """Spec: LOG-11, LOG-20, LEASE-20."""
     await url_denying("flushall")
     through_proxy = make_client(
         proxy.url.replace("redis://", f"redis://{key_prefix}@"), retry=Retry(NoBackoff(), 0)

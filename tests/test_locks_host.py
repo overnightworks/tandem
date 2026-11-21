@@ -55,6 +55,7 @@ async def test_a_host_admit_refuses_while_the_lock_is_held_and_admits_once_it_is
     observer: Redis,
     depth: str,
 ):
+    """Spec: LOCK-9, LUA-6."""
     client = make_client(redis_url)
     locks = new_locks(client)
     admit = Admit(client, locks, depth)
@@ -77,6 +78,7 @@ async def test_a_host_admit_after_a_wipe_creates_the_epoch_and_refuses_until_las
     key_prefix: str,
     depth: str,
 ):
+    """Spec: LUA-2, LUA-6."""
     client = make_client(redis_url)
     locks = new_locks(client, lasts=LASTS)
     admit = Admit(client, locks, depth)
@@ -148,6 +150,7 @@ async def test_an_admit_racing_a_reserve_never_leaves_a_lock_beside_a_depth(
     observer: Redis,
     depth: str,
 ):
+    """Spec: LUA-6."""
     client = make_client(redis_url)
     locks = new_locks(client)
     race = Reserve(locks, observer, depth, admit_at)

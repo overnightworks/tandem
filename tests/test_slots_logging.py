@@ -25,6 +25,7 @@ async def test_every_slot_call_writes_one_line_with_its_outcome(
     new_slots: Callable[..., Slots],
     log_lines: LogLines,
 ):
+    """Spec: LOG-6."""
     call = _SLOT_CALLS[event]
     refused = new_slots(make_client(await url_denying("evalsha")))
 
@@ -47,6 +48,7 @@ async def test_a_full_pool_answers_ok_and_no_line_carries_a_pool_or_a_token(
     new_slots: Callable[..., Slots],
     log_lines: LogLines,
 ):
+    """Spec: LOG-6, LOG-22."""
     slots = new_slots(make_client(redis_url))
     token = await slots.take({_POOL: 1})
     assert token is not None

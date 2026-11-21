@@ -27,6 +27,7 @@ async def test_an_absent_holder_reads_gone_at_once_only_after_settle_epoch(
     settled: bool,
     lasts: timedelta,
 ):
+    """Spec: TESTING-1."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=lasts)
     locks = new_locks(client, lasts=lasts)

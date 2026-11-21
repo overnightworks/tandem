@@ -24,6 +24,7 @@ async def test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as
     make_client: Callable[..., Redis],
     new_slots: Callable[..., Slots],
 ):
+    """Spec: STORE-1."""
     cut = new_slots(make_client(proxy.url, retry=Retry(NoBackoff(), 0)))
     refused = new_slots(make_client(await url_denying("evalsha")))
     proxy.cut()
@@ -43,6 +44,7 @@ async def test_a_take_whose_reply_is_lost_is_replayed_to_the_same_token_and_coun
     make_client: Callable[..., Redis],
     new_slots: Callable[..., Slots],
 ):
+    """Spec: SLOT-6."""
     direct = new_slots(make_client(redis_url))
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
     proxy_pod = new_slots(retrying)
@@ -65,6 +67,7 @@ async def test_a_release_whose_reply_is_lost_is_replayed_to_false_and_the_hold_i
     make_client: Callable[..., Redis],
     new_slots: Callable[..., Slots],
 ):
+    """Spec: SLOT-8."""
     direct = new_slots(make_client(redis_url))
     token = await direct.take({"person-a": 1})
     assert token is not None

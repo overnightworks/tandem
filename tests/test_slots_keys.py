@@ -16,6 +16,7 @@ async def test_every_key_after_use_is_the_slot_key(
     observer: Redis,
     key_prefix: str,
 ):
+    """Spec: LAYOUT-9."""
     slots = new_slots(make_client(redis_url))
     token = await slots.take({"global": 2, "person-a": 1})
     assert token is not None
@@ -93,6 +94,7 @@ async def test_a_family_named_like_another_structures_family_or_a_fixed_token_sh
 def test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming_the_argument(
     make_client: Callable[..., Redis], redis_url: str, argument: str, value: object
 ):
+    """Spec: SLOT-1."""
     arguments = {"key_prefix": "skat", "family": "gpu", "lasts": timedelta(seconds=30)}
     client = make_client(redis_url)
 
@@ -109,6 +111,7 @@ async def test_limits_that_are_empty_or_hold_a_cap_that_is_not_a_count_raise_nam
     new_slots: Callable[..., Slots],
     limits: dict[str, object],
 ):
+    """Spec: SLOT-4."""
     slots = new_slots(make_client(redis_url))
 
     with pytest.raises(ValueError, match="limits"):

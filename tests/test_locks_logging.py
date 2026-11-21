@@ -26,6 +26,7 @@ async def test_every_lock_call_writes_one_line_with_its_outcome(
     new_locks: Callable[..., Locks],
     log_lines: LogLines,
 ):
+    """Spec: LOG-5."""
     call = _LOCK_CALLS[event]
     refused = new_locks(make_client(await url_denying("evalsha")))
 

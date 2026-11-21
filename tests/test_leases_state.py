@@ -23,6 +23,7 @@ async def test_a_live_holder_reads_alive_with_its_generation_and_its_expiry_unch
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-7."""
     leases = new_leases(make_client(redis_url), lasts=LONG_LASTS)
     renewal = await leases.renew("pod-a")
     expiry = lease_keys(key_prefix, "owner").expiry
@@ -44,6 +45,7 @@ async def test_reading_the_state_of_an_absent_holder_creates_no_lease(
     new_leases: Callable[..., Leases],
     key_prefix: str,
 ):
+    """Spec: LEASE-7."""
     leases = new_leases(make_client(redis_url))
     keys = lease_keys(key_prefix, "owner")
 
@@ -60,6 +62,7 @@ async def test_an_ended_or_expired_holder_reads_gone_without_generation_or_remai
     new_leases: Callable[..., Leases],
     ended_first: bool,
 ):
+    """Spec: LEASE-8."""
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     renewal = await leases.renew("pod-a")
     if ended_first:
@@ -73,6 +76,7 @@ async def test_an_ended_or_expired_holder_reads_gone_without_generation_or_remai
 async def test_a_lapsed_and_renewed_holder_reads_the_new_generation_and_the_old_one_ends_nothing(
     redis_url: str, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
 ):
+    """Spec: LEASE-6, LEASE-7."""
     leases = new_leases(make_client(redis_url), lasts=LASTS)
     old = await leases.renew("pod-a")
     await until_gone(leases, "pod-a")
@@ -96,6 +100,7 @@ async def test_a_state_racing_renewals_and_ends_of_its_holder_reads_the_generati
     # (live), end called, end returned (gone). A read that saw ticks `before` to `after` may report
     # only what the holder could read at one of those ticks. After the returned renew and the
     # returned end, the writer waits for a read wholly inside that tick.
+    """Spec: LEASE-7."""
     writer = new_leases(make_client(redis_url), lasts=LONG_LASTS)
     readers = [new_leases(make_client(redis_url), lasts=LONG_LASTS) for _ in range(READERS)]
     ticks = 0
@@ -155,6 +160,7 @@ async def test_many_holders_read_in_one_round_trip_each_by_its_own_liveness(
     settled_epoch: None,
     monkeypatch: pytest.MonkeyPatch,
 ):
+    """Spec: LEASE-7."""
     client = make_client(redis_url)
     leases = new_leases(client, lasts=LONG_LASTS)
     alive = await leases.renew("alive")

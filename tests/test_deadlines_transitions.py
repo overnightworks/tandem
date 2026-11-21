@@ -51,6 +51,7 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
     claim_for: timedelta,
     claim_runs_out: bool,
 ):
+    """Spec: DEADLINE-4, DEADLINE-9, LUA-3."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client, claim_for=claim_for)
     old = await _claimed_key(client, deadlines)
@@ -74,6 +75,7 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
 async def test_a_stale_extend_after_a_superseding_set_leaves_the_new_due_untouched(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: DEADLINE-8, LUA-3."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client)
     old = await _claimed_key(client, deadlines)
@@ -89,6 +91,7 @@ async def test_a_stale_extend_after_a_superseding_set_leaves_the_new_due_untouch
 async def test_cancel_removes_a_pending_or_a_claimed_key_and_voids_its_claim(
     backend: Backend, new_deadlines: Callable[..., Deadlines], claimed_first: bool
 ):
+    """Spec: DEADLINE-5, LUA-4."""
     client = backend.new_client()
     deadlines = new_deadlines(client)
     await deadlines.set("room-1", timedelta(0))
@@ -106,6 +109,7 @@ async def test_cancel_removes_a_pending_or_a_claimed_key_and_voids_its_claim(
 async def test_cancel_of_an_absent_key_is_false(
     backend: Backend, new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: DEADLINE-5."""
     deadlines = new_deadlines(backend.new_client())
 
     assert await deadlines.cancel("never-set") is False
@@ -114,6 +118,7 @@ async def test_cancel_of_an_absent_key_is_false(
 async def test_deadline_state_reads_waiting_with_the_due_and_claimed_with_the_expiry(
     backend: Backend, new_deadlines: Callable[..., Deadlines]
 ):
+    """Spec: LUA-5."""
     client = backend.new_client()
     deadlines = new_deadlines(client, claim_for=timedelta(seconds=30))
     before_set = await redis_ms(client)
@@ -140,6 +145,7 @@ async def test_deadline_state_reads_waiting_with_the_due_and_claimed_with_the_ex
 async def test_deadline_state_is_nil_once_a_key_is_done_cancelled_or_never_set(
     backend: Backend, new_deadlines: Callable[..., Deadlines], ending: str
 ):
+    """Spec: LUA-5."""
     client = backend.new_client()
     deadlines = new_deadlines(client)
     if ending != "never set":

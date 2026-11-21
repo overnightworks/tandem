@@ -20,6 +20,7 @@ async def test_a_family_named_like_a_lease_family_or_a_fixed_key_shares_no_key_a
     key_prefix: str,
     name: str,
 ):
+    """Spec: LAYOUT-4."""
     client = make_client(redis_url)
     locks = new_locks(client, family=name)
     leases = new_leases(client, family=name)
@@ -65,6 +66,7 @@ async def test_a_family_named_like_a_lease_family_or_a_fixed_key_shares_no_key_a
 def test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming_the_argument(
     make_client: Callable[..., Redis], redis_url: str, argument: str, value: object
 ):
+    """Spec: LOCK-1."""
     arguments = {"key_prefix": "skat", "family": "gpu", "lasts": timedelta(seconds=30)}
     client = make_client(redis_url)
 

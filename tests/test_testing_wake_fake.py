@@ -40,6 +40,7 @@ async def entered_after_resyncs(
 
 
 async def test_a_following_that_was_withheld_its_confirmation_enters_once_resync_confirms():
+    """Spec: TESTING-4."""
     channel = FakeWakeBus().pod()
     channel.withhold_confirmation()
     resyncs: list[str] = []
@@ -52,6 +53,7 @@ async def test_a_following_that_was_withheld_its_confirmation_enters_once_resync
 
 
 async def test_a_wake_published_while_the_confirmation_is_withheld_is_lost_before_the_resync():
+    """Spec: TESTING-4."""
     bus = FakeWakeBus()
     channel, other_pod = bus.pod(), bus.pod()
     channel.withhold_confirmation()
@@ -79,6 +81,7 @@ async def test_a_wake_published_while_the_confirmation_is_withheld_is_lost_befor
 
 
 async def test_a_following_after_the_resync_of_a_withheld_confirmation_is_confirmed_at_once():
+    """Spec: TESTING-4."""
     channel = FakeWakeBus().pod()
     channel.withhold_confirmation()
 
@@ -88,6 +91,7 @@ async def test_a_following_after_the_resync_of_a_withheld_confirmation_is_confir
 
 
 async def test_a_channel_constructed_on_a_bus_hears_every_wake_once():
+    """Spec: TESTING-2."""
     bus = FakeWakeBus()
     channel = FakeWakeChannel(bus)
     addresses: list[str] = []
@@ -121,6 +125,7 @@ async def heard_by_a_following_pod(bus: FakeWakeBus, addresses: list[str]) -> As
 
 
 async def test_publishes_raise_the_given_errors_in_order_and_deliver_nothing_then_deliver_again():
+    """Spec: TESTING-5."""
     bus = FakeWakeBus()
     addresses: list[str] = []
     publisher = bus.pod()
@@ -145,6 +150,7 @@ async def test_publishes_raise_the_given_errors_in_order_and_deliver_nothing_the
 
 
 async def test_a_publish_made_while_held_stays_pending_and_release_delivers_in_order():
+    """Spec: TESTING-6."""
     bus = FakeWakeBus()
     addresses: list[str] = []
     publisher = bus.pod()
@@ -167,6 +173,7 @@ async def test_a_publish_made_while_held_stays_pending_and_release_delivers_in_o
 
 
 async def test_a_held_publish_cancelled_by_its_caller_delivers_nothing_even_after_release():
+    """Spec: TESTING-6."""
     bus = FakeWakeBus()
     addresses: list[str] = []
     publisher = bus.pod()

@@ -11,6 +11,7 @@ async def test_after_a_redis_restart_takes_are_granted_at_once(
     make_client: Callable[..., Redis],
     new_slots: Callable[..., Slots],
 ):
+    """Spec: LAYOUT-11."""
     client = make_client(restartable_redis_url)
     slots = new_slots(client)
     assert await slots.take({"person-a": 1}) is not None

@@ -17,6 +17,7 @@ async def test_after_a_redis_restart_acquire_waits_for_lasts_and_the_old_generat
     make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
 ):
+    """Spec: LOCK-4."""
     client = make_client(restartable_redis_url)
     locks = new_locks(client, lasts=LASTS)
 

@@ -16,6 +16,7 @@ from tests.support.waiting import BOUND, until
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
+    """Spec: WAKE-11, WAKE-26."""
     writer = WakeChannel(backend.new_client(), key_prefix=key_prefix)
     observer = backend.new_client()
     channel = WakeChannel(backend.new_client(), key_prefix=key_prefix)
@@ -47,6 +48,7 @@ async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend
 async def test_a_wake_published_through_one_client_arrives_through_another(
     backend: Backend, key_prefix: str, decode_responses: bool
 ):
+    """Spec: WAKE-3."""
     publisher = WakeChannel(backend.new_client(), key_prefix=key_prefix)
     subscriber = backend.new_client(decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
@@ -64,6 +66,7 @@ _ADDRESSES = ["orders/7", "", "12:orders", ":", "0:", "5:abc", "caf\u00e9/7", "a
 async def test_a_wake_arrives_with_its_address_byte_for_byte_and_no_trace_when_the_sender_has_none(
     address: str, redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
+    """Spec: WAKE-3, WAKE-23."""
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
         await reader.next_resynced()
@@ -82,6 +85,7 @@ async def test_a_wake_arrives_with_its_address_and_the_trace_of_its_sender(
     make_client: Callable[..., Redis],
     key_prefix: str,
 ):
+    """Spec: WAKE-3, WAKE-18, WAKE-23."""
     publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
@@ -110,6 +114,7 @@ async def test_a_payload_that_is_no_frame_is_skipped_and_the_next_wake_still_arr
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: WAKE-25, WAKE-28, WAKE-29, LOG-17."""
     publisher = make_client(redis_url)
     subscriber = make_client(redis_url, decode_responses=decode_responses)
     async with Reader(WakeChannel(subscriber, key_prefix=key_prefix)) as reader:
@@ -129,6 +134,7 @@ async def test_a_payload_that_is_no_frame_is_skipped_and_the_next_wake_still_arr
 async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
     redis_url: str, make_client: Callable[..., Redis], key_prefix: str
 ):
+    """Spec: WAKE-3."""
     host_client = make_client(redis_url, encoding="latin-1")
     channel = WakeChannel(host_client, key_prefix=key_prefix)
     async with Reader(channel) as reader:
@@ -140,6 +146,7 @@ async def test_an_address_arrives_in_the_encoding_of_the_hosts_client(
 async def test_publish_fails_during_an_outage_and_delivers_after_it(
     backend: Backend, key_prefix: str
 ):
+    """Spec: WAKE-6."""
     subscriber_client = backend.new_client()
     publisher_client, outage = backend.publisher_with_outage()
     publisher = WakeChannel(publisher_client, key_prefix=key_prefix)
@@ -155,6 +162,7 @@ async def test_publish_fails_during_an_outage_and_delivers_after_it(
 
 @pytest.mark.parametrize("key_prefix", ["a:b", "", "Upper", "-lead", "a b", "a\n"])
 def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend, key_prefix: str):
+    """Spec: WAKE-1."""
     client = backend.new_client()
     with pytest.raises(ValueError, match="key_prefix"):
         WakeChannel(client, key_prefix=key_prefix)
@@ -164,6 +172,7 @@ def test_construction_refuses_a_prefix_that_is_not_one_segment(backend: Backend,
 
 @pytest.mark.parametrize("value", ["skat", "skat-agents", "0a"])
 def test_checked_segment_returns_a_prefix_that_wake_channel_accepts(value: str):
+    """Spec: WAKE-2."""
     assert checked_segment(value, argument="key_prefix") == value
     WakeChannel(Redis(), key_prefix=value)
 
@@ -233,6 +242,7 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
     key_prefix: str,
     log_lines: LogLines,
 ):
+    """Spec: WAKE-28, WAKE-29, LOG-17."""
     malformed_text = "malformed-wake"
     malformed = b"0:" + malformed_text.encode() + b"\xff"
     publisher = make_client(redis_url)
