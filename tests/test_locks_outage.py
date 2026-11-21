@@ -46,6 +46,7 @@ async def test_an_acquire_whose_reply_is_lost_is_replayed_to_the_same_generation
     make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
 ):
+    """Spec: LOCK-10."""
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3)
     proxy_pod = new_locks(retrying)
     # A cold script loses its reply as NOSCRIPT, before anything ran; the warm-up loads it.
@@ -64,6 +65,7 @@ async def test_a_release_whose_reply_is_lost_is_replayed_to_false_and_the_lock_i
     make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
 ):
+    """Spec: LOCK-11."""
     direct = new_locks(make_client(redis_url))
     generation = await direct.acquire("gpu-0")
     assert generation is not None
