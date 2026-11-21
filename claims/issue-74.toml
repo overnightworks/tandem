@@ -1,0 +1,8 @@
+claim_id = "f1ced8b8d39547c48317d9359f061125"
+agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
+role = "builder"
+base = "7e7ca5c4922259e3bf6e791429a828be139c6586"
+branch = "claude/issue-74-the-reference-s-unproven-rules-get-a-tes"
+scope = ["docs/reference.md", "tests"]
+opened_commit = "9e13f4c967b54b363f48048c90d0313bd956f02e"
+whole_reason = "One pass over the reference's unproven rules adds tests across modules and marks the rest in the reference."
