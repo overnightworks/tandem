@@ -97,8 +97,9 @@ async def test_a_publish_whose_replies_are_all_lost_fails_once_the_clients_retry
         await reader.next_resynced()
         proxy.drop_replies()
 
+        bounded_publish = within(publisher.publish("orders/7"))
         with pytest.raises(StoreError):
-            await within(publisher.publish("orders/7"))
+            await bounded_publish
 
         await WakeChannel(make_client(redis_url), key_prefix=key_prefix).publish("barrier")
         wakes = [await reader.next_wake()]
