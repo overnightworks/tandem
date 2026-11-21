@@ -1,0 +1,7 @@
+claim_id = "afec0655cbd5405f9d05b68ee8ca0a6a"
+agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
+role = "builder"
+base = "77ef536698fb5697541d32827af8847dfec7d14b"
+branch = "claude/issue-84-the-span-duties-state-their-exact-reason"
+scope = ["docs/VISION.md", "docs/reference.md"]
+opened_commit = "eb21be21a15b198fc189289c42974bc171819142"
