@@ -176,7 +176,7 @@ async def test_a_holder_may_be_any_string(
     assert await liveness_of(leases, holder) is Liveness.ALIVE
 
 
-async def test_a_renewal_whose_reply_is_lost_is_replayed_as_not_started_with_the_started_generation(
+async def test_a_renewal_whose_reply_is_lost_still_reads_as_the_start_it_was(
     proxy: TcpProxy,
     redis_url: str,
     make_client: Callable[..., Redis],
@@ -191,5 +191,5 @@ async def test_a_renewal_whose_reply_is_lost_is_replayed_as_not_started_with_the
 
     renewal = await retrying.renew("pod-a")
 
-    assert renewal.started is False
+    assert renewal.started is True
     assert (await direct.state(["pod-a"]))["pod-a"].generation == renewal.generation

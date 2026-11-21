@@ -39,7 +39,7 @@ from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import Deadlines, Leases, Locks, Slots, StoreError, Wake, WakeChannel
 
-# Retry and timeouts: duties 1 and 2 of the reference.
+# Retry and timeouts: duty 1 of the reference.
 redis = Redis.from_url(
     "redis://redis:6379",
     retry=Retry(ExponentialBackoff(), 3),

@@ -5,10 +5,12 @@ from redis.asyncio import Redis
 
 from tandem import Slots
 from tandem.keys import slot_key
+from tests.support.deadlines import until_redis_ms
 from tests.support.slots import FAMILY, take_hold_left_expired_beside_a_live_one
 from tests.support.waiting import until
 
 LASTS = timedelta(milliseconds=300)
+LONG_LASTS = timedelta(hours=1)
 
 
 async def test_a_hold_frees_its_slot_on_redis_time_and_the_family_key_goes_with_the_last_hold(
@@ -69,3 +71,44 @@ async def test_a_take_frees_the_expired_hold_while_a_later_live_hold_keeps_the_f
 
     assert await observer.zscore(family, expired) is None
     assert await observer.zcard(family) == 2
+
+
+async def test_a_take_with_a_shorter_lasts_does_not_drop_a_longer_hold_of_another_pod(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_slots: Callable[..., Slots],
+    observer: Redis,
+    key_prefix: str,
+):
+    """Spec: SLOT-9."""
+    longer = new_slots(make_client(redis_url), lasts=LONG_LASTS)
+    shorter = new_slots(make_client(redis_url), lasts=LASTS)
+    assert await longer.take({"person-a": 1}) is not None
+    short_hold = await shorter.take({"person-b": 1})
+    assert short_hold is not None
+    expiry = await observer.zscore(slot_key(key_prefix, FAMILY), short_hold)
+    assert expiry is not None
+    await until_redis_ms(observer, int(expiry) + 1)
+
+    assert await shorter.take({"person-a": 1}) is None
+
+
+async def test_the_family_key_ends_with_its_last_hold_after_the_latest_hold_is_released(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_slots: Callable[..., Slots],
+    observer: Redis,
+    key_prefix: str,
+):
+    """Spec: LAYOUT-10."""
+    longer = new_slots(make_client(redis_url), lasts=LONG_LASTS)
+    shorter = new_slots(make_client(redis_url), lasts=LASTS)
+    long_hold = await longer.take({"person-a": 1})
+    assert long_hold is not None
+    assert await shorter.take({"person-b": 1}) is not None
+    assert await longer.release(long_hold)
+
+    async def key_gone() -> bool:
+        return not await observer.exists(slot_key(key_prefix, FAMILY))
+
+    await until(key_gone)
