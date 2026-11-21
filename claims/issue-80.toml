@@ -1,0 +1,7 @@
+claim_id = "16772fc3420348e2a4d1f6608db144a1"
+agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
+role = "builder"
+base = "9a7be5af710cbc55ef3e6dcd9910fbe59d74e870"
+branch = "claude/issue-80-tandem-0-13-1"
+scope = ["src/tandem/__init__.py"]
+opened_commit = "4bed7e174df2b3d7f21a0883c0d15cdb5f20e1cb"
