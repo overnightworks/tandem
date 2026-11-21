@@ -1,7 +1,0 @@
-claim_id = "013b58b430a74128a783f8cd88fbf65c"
-agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
-role = "builder"
-base = "0aa26e64be541dbe7cf72e70fad2088a5c17e237"
-branch = "claude/issue-72-tandem-s-vision-states-its-end-state"
-scope = ["docs/VISION.md"]
-opened_commit = "e457bf9e29d9cf5b2be4a71dc7fed36aef3474a2"
