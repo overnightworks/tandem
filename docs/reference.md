@@ -23,20 +23,20 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `deadlines.keys` | [DEADLINE-10] The `DeadlineKeys` (`due`, `claimed`, `claim`), the three key names of the kind, for a caller's script that runs `LUA_KIT`'s transitions on them. A script gets them as `KEYS` in the order `due`, `claimed`, `claim` (`[keys.due, keys.claimed, keys.claim]`) and builds the `keys` table of `LUA_KIT` with `local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}`. |
 | `Script(redis, source)` | A caller's Lua, run after `LUA_KIT`. [SCRIPT-1] `await script.run(keys, args)` runs it by its SHA, loads it again after `NOSCRIPT` and returns Redis's raw reply. [SCRIPT-2] Every Redis failure raises `StoreError`. [SCRIPT-3] The host client's `Retry` governs a lost connection and can run the script again after a lost reply; tandem adds no retry. Redis does not roll a script back: a script that fails after a write keeps the write, so it checks before it writes. [SCRIPT-4] `LUA_KIT` is prepended to `source`, so an error's line number is offset by the kit's lines, and a `#!lua` shebang cannot be used. |
 | `Leases(redis, *, key_prefix, family, lasts, claim_for)` | The leases of one `family` of one app. A lease lasts `lasts` after its latest renewal; a claim on a lapse holds for `claim_for`. [LEASE-1] `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`; anything else raises `ValueError` naming the argument. [LEASE-2] `lasts` and `claim_for` are positive `timedelta`s; anything else raises `ValueError` naming the argument. [LEASE-3] A holder is any string. |
-| `await leases.renew(holder)` | [LEASE-4] Keeps the lease of `holder` for another `lasts` on Redis `TIME` and returns a `Renewal`. [LEASE-5] A lease that is not live (never started, ended, or expired) starts anew under a fresh random 128-bit generation with `started=True`; exactly one of several concurrent renewals sees it. [LEASE-22] A reply lost under the client's `Retry` can replay a renewal as `started=False`, with the generation the lease started under. |
+| `await leases.renew(holder)` | [LEASE-4] Keeps the lease of `holder` for another `lasts` on Redis `TIME` and returns a `Renewal`. [LEASE-5] A lease that is not live (never started, ended, or expired) starts anew under a fresh random 128-bit generation with `started=True`; exactly one of several concurrent renewals sees it. [LEASE-22] `started` is True whenever the generation this renewal proposed is the live one afterwards, so a renewal that a reply lost under the client's `Retry` replayed still reads as the start it was. |
 | `await leases.end(holder, generation)` | [LEASE-6] Ends the live lease of `generation` at once and queues its lapse as due now. False, and nothing changes, when `generation` is not the holder's current one or the lease is no longer live. |
 | `await leases.state(holders)` | [LEASE-7] A `dict` from each holder to a `LeaseState(liveness, generation, remaining)`, read in one script that renews and starts nothing. ALIVE while its lease is live, with its `generation` and the `remaining` time. [LEASE-8] Otherwise UNKNOWN until `lasts` have passed since the app's epoch, then GONE, and `generation` and `remaining` are None. The epoch is the Redis time of the first command of any pod after Redis lost its data, so a restart reads UNKNOWN, not GONE, for `lasts`; a host reconciles after the restart. A host that did not start the lease reads its generation here, for example to accept an add under the agent's current generation and later end only what that generation made on a `Lapse`. [LEASE-9] An empty collection returns `{}` without a Redis call. |
 | `await leases.live()` | [LEASE-10] A `Roster(holders, settled)`, read in one script: every live holder, and whether `lasts` have passed since the epoch. A roster that is not `settled` may miss holders that a restart took. |
 | `leases.kept(holder, *, every)` | [LEASE-11] An async context manager that renews `holder` once before the block runs, then every `every`, and ends the lease at exit. [LEASE-12] It yields a `Hold` whose `generation` follows each renewal, so a holder that lapsed and started again shows the new one. [LEASE-13] `every` is a positive `timedelta` below `lasts`, or it raises `ValueError` naming `every`. [LEASE-14] A `StoreError` of the first renewal raises out of the entry; a failed later renewal is logged and retried, never ends the block. [LEASE-15] At exit an in-flight renewal completes, then the current generation is ended, shielded from cancellation. |
 | `await leases.serve_lapses(handle, *, every)` | [LEASE-16] Runs until cancelled. Each `every` it sweeps expired leases into the lapse queue and claims the due lapses in small batches until none is due, and calls `await handle(lapse)` for each, at least once. [LEASE-17] While `handle` runs its claim is extended every `claim_for / 3`; a failed extension is logged and stops, and `handle` is never cancelled. [LEASE-18] `done` follows a `handle` that returns; one that raises is logged and its lapse returns to a worker when its claim runs out. [LEASE-19] Each `handle` runs in a trace of its own, which ends with it. [LEASE-20] An outage of Redis is ridden out with the back-off of the wake channel's following; a refusal raises `StoreError`. |
 | `Locks(redis, *, key_prefix, family, lasts)` | The locks of one `family` of one app. A lock lasts `lasts` after its latest start or extension. [LOCK-1] `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` is a positive `timedelta`; anything else raises `ValueError` naming the argument. [LOCK-2] A name is any string. |
-| `await locks.acquire(name)` | [LOCK-3] Starts the lock on `name` under a fresh random 128-bit generation and returns it, or returns None when a live lock holds `name`, the holder asking again included: a lock is not re-entrant, and `acquire` never extends one. [LOCK-4] After a Redis restart it returns None until `lasts` have passed since the app's epoch. [LOCK-10] A reply lost under the client's `Retry` replays `acquire` to the same generation. |
+| `await locks.acquire(name)` | [LOCK-3] Starts the lock on `name` under a fresh random 128-bit generation and returns it, or returns None when a live lock holds `name`, the holder asking again included: a lock is not re-entrant, and `acquire` never extends one. [LOCK-4] After a Redis restart it returns None until `lasts` have passed since the app's epoch. None therefore means "not yours yet": it answers a live holder and the `lasts` after a restart alike, so a host retries later or gives up and never reads None as a fault. [LOCK-10] A reply lost under the client's `Retry` replays `acquire` to the same generation. |
 | `await locks.extend(name, generation)` | [LOCK-5] Keeps the live lock of `generation` for another `lasts` on Redis `TIME`. False, and nothing changes, for an absent, foreign or expired generation, even when nobody took the name since. |
 | `await locks.release(name, generation)` | [LOCK-6] Ends the live lock of `generation` at once; the next `acquire` gets a new generation. False, and nothing changes, for any other generation. [LOCK-7] tandem has no release without the generation: a crashed holder's lock runs out after `lasts`. [LOCK-11] A reply lost under the client's `Retry` replays a `release` that succeeded as False. |
 | `await locks.state(name)` | [LOCK-8] A `LockState(liveness, generation, remaining)`, read in one script. ALIVE while held, with the holder's `generation` and the `remaining` time; GONE when free; UNKNOWN until `lasts` have passed since the epoch when Redis may have lost the lock. |
 | `locks.keys`, `locks.lasts` | [LOCK-9] The `LockKeys` (`epoch`, `expiry`, `generation`) and the `lasts` of the family, for a host's script that calls `tandem.lock_state`. A script gets the keys as `KEYS` in the order `epoch`, `expiry`, `generation` and builds the table with `local keys = {epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}`. |
 | `Slots(redis, *, key_prefix, family, lasts)` | The counted holds of one `family` of one app. A hold lasts `lasts` after its take. [SLOT-1] `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` is a positive `timedelta`; anything else raises `ValueError` naming the argument. [SLOT-2] A pool is any string. |
-| `await slots.take(limits)` | `limits` maps a pool to its cap. [SLOT-3] Holds one slot in every pool of `limits`, or in none, in one script, and returns the token; returns None when any pool already has its cap of live holds. It never waits. [SLOT-4] An empty mapping, or a cap that is not an `int`, is a `bool` or is negative, raises `ValueError` naming `limits`. [SLOT-5] A cap of 0 refuses every take. The token is opaque: the host keeps it and passes it back to `release` unchanged, and its form is no contract. It embeds the pools, so the host treats it like them and never logs it. [SLOT-6] A reply lost under the client's `Retry` replays the take with the same random part, which returns the same token, so the hold counts once. |
+| `await slots.take(limits)` | `limits` maps a pool to its cap. [SLOT-3] Holds one slot in every pool of `limits`, or in none, in one script, and returns the token; returns None when any pool already has its cap of live holds. It never waits, and it costs O(live holds of the family): a pool that every take includes is bounded by its cap, and nothing bounds a family whose takes name pools that other takes leave out. [SLOT-9] A hold lasts the `lasts` of the pod that took it, so a pod with a shorter `lasts` drops no other pod's hold. [SLOT-4] An empty mapping, or a cap that is not an `int`, is a `bool` or is negative, raises `ValueError` naming `limits`. [SLOT-5] A cap of 0 refuses every take. The token is opaque: the host keeps it and passes it back to `release` unchanged, and its form is no contract. It embeds the pools, so the host treats it like them and never logs it. [SLOT-6] A reply lost under the client's `Retry` replays the take with the same random part, which returns the same token, so the hold counts once. A take that raised `StoreError` may still have granted a hold, because the script may have run and only the reply been lost; the hold then occupies its slots until `lasts` runs out, so the host treats the take as refused and does not retry it in a loop that would fill the pool. |
 | `await slots.release(token)` | [SLOT-7] Ends the hold of `token` in all its pools and returns True only when the hold was live. False, and nothing changes, for an unknown token; an expired token returns False and its entry is removed on the way. [SLOT-8] A reply lost under the client's `Retry` replays a release that succeeded as False. There is no renewal and no count to read. |
 | `Renewal(started, generation)` | The result of `renew`. |
 | `Lapse(holder, generation, due)` | A lease that ended or expired, with the generation it had. |
@@ -82,8 +82,8 @@ no lapse queue: a crashed holder's lock expires after `lasts`, and what follows 
 
 [LAYOUT-8] The slots of a family live in one ZSET, `<key_prefix>:tandem:v1:slot:<family>:holders`, scored by each hold's
 expiry in ms; a hold's member is the JSON of its token's random part followed by its pools. [LAYOUT-9] A pool is never a
-key segment. [LAYOUT-10] Every `take` removes the expired members of its family, and each granted take sets the key's expiry to
-`lasts`, so the key is gone once every hold has expired. [LAYOUT-11] Slots read and write no epoch.
+key segment. [LAYOUT-10] Every `take` removes the expired members of its family, and each granted take and each release sets the key's expiry to
+that of its latest hold, so the key is gone once every hold has expired. [LAYOUT-11] Slots read and write no epoch, so after a Redis restart takes are granted at once and a cap can be exceeded by the lost holds for at most `lasts`. A host that moves an existing limiter onto `Slots` counts in two places while old and new pods run side by side, so each cap can be reached twice over for that deploy window; a change of `family` or `key_prefix` does the same.
 
 [WAKE-20] The channel is `<key_prefix>:tandem:v2:wake`: one channel per key prefix, so every pod that follows the
 same channel uses the same `key_prefix`. [WAKE-21] An app may run several `WakeChannel`s on one Redis under distinct
@@ -144,7 +144,7 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
   like a direct `end`; when a cancellation hides a failed end, `lease_end.failed` is its one error line.
 - [LOG-20] A refusal that reaches the host as `StoreError` out of `serve_lapses` or the entry of `following` writes no line:
   the host's layer logs it.
-- [LOG-21] A holder is an id (see duty 13), so `holder_id` is the holder string. [LOG-22] No line carries a generation, a lapse's
+- [LOG-21] A holder is an id (see duty 11), so `holder_id` is the holder string. [LOG-22] No line carries a generation, a lapse's
   key, a wake payload, a traceparent or the text of a `StoreError`.
 - [LOG-23] A lapse is delivered at least once, so a replayed lapse writes a second `lapse_handling.ended`.
 - [LOG-24] The wake carries its sender's traceparent: `following` calls `on_wake` inside `unit_trace(wake.traceparent)`,
@@ -153,67 +153,51 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 ## The host's duties
 
 Redis pub/sub delivers a wake to the readers subscribed at that moment and keeps nothing. `following`
-calls the host's re-read at each resync, holds the pod's start until the first one and carries each wake's trace. Two
-duties remain for the wake, two more cover deadlines, four cover leases, four cover locks, four cover slots and one covers logs:
+calls the host's re-read at each resync, holds the pod's start until the first one and carries each wake's trace.
+What tandem cannot own is the host's own truth and the fence that refuses a stale effect in the host's own store.
+Eleven duties remain: one for the wake, two for deadlines, four for leases, three for locks and one for logs:
 
-1. **Give the client a `Retry`, so the re-read at `on_resync` survives a Redis restart.** After a restart the
-   host's own client can still hold stale pooled connections, so the first command of that re-read fails
-   with `ConnectionError` on a default `redis.asyncio` client. The host's client therefore carries a
-   `Retry`, as in the quick start, or the re-read retries itself. On redis-py 5.x the client also passes
-   `retry_on_error` with `ConnectionError` and `TimeoutError`, or its `Retry` replays nothing, a lost
-   reply included; redis-py 8 retries those two without it.
-2. **After a failed `publish`, publish again or bound the readers' staleness.** `publish` ends when the
-   client's `Retry` gives up, like `Script.run` and every command on that client; that is finite only with
-   `retries >= 0` and with `socket_timeout` and `socket_connect_timeout` set, so the host sets them and
-   builds its client with a `retry`. A failure means the delivery is uncertain: the `PUBLISH` may never
-   have reached Redis, or Redis delivered it and only the reply was lost, and the `Retry` may already have
-   sent it more than once. One `publish` of the same address after the failure runs the `Retry` again and
-   only causes a duplicate wake. Alternatively every reader re-reads on a period, which bounds how stale it
-   can get. A loop of the host's own around `publish` multiplies both the sends and the bound.
-3. **Fence the effect of a claimed deadline with your own version.** A due key reaches a handler at least
-   once and each key has at most one valid claim at a time, yet a handler that pauses past its claim runs
-   beside the next worker after a takeover. The host checks and writes its effect against a version or
-   generation of its own, in one atomic step of its own store, so the older handler's effect is refused.
-4. **Reconcile the deadlines after a Redis restart.** A restart takes every pending deadline and every claim
-   with it. The host derives what its durable state needs (the deadlines it guards) and `set`s them again
-   at start and after it notices a restart, for example at an `on_resync` call.
-5. **One `kept` per holder.** Several pods may renew one holder when "any of them is alive" is the
-   intended meaning: `renew` is atomic, and the lease then cannot tell them apart. A `kept` ends the shared
-   generation at its exit, so only one pod runs it.
-6. **The same `lasts` and `claim_for` for every pod of a family.** The lease and the claim are measured by
-   the pod that reads them; pods that differ read each other's leases and claims by their own span.
-7. **Treat a generation that differs from the stored one as the start.** A reply lost under the client's
-   `Retry` can replay `renew` as `started=False` ([LEASE-22]), so a host compares the generation with the one it stored
-   instead of trusting `started`. It fences its effects with that generation, checked in the same atomic
-   step as the write (a generation is random and compared only by equality).
-8. **Reconcile after a Redis restart.** A restart takes every lease, lapse and claim with it: a lapse in
-   flight is never delivered, and an absent lease reads UNKNOWN for `lasts` and then GONE. The host
-   re-derives what it must free from its durable state, at its reconcile period, and reads GONE as the
-   signal that nobody renews.
-9. **Treat a `None` from `acquire` as "not yours yet".** It answers a live holder and the `lasts` after a
-    Redis restart alike, so the host retries later or gives up, and never reads None as a fault.
-10. **Keep the generation and stop at the first `extend` or `release` that returns False.** The lock is
-    then lost or ended, and whoever kept working under it fences its effects with the generation, as in
-    duty 7. A reply lost under the client's `Retry` is replayed as [LOCK-10] and [LOCK-11] state.
-11. **Extend before `lasts` run out, with the same `lasts` for every pod of a family.** A holder that
-    pauses past `lasts` loses its lock to the next `acquire`. The span is measured by the pod that reads it.
-12. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`.** `locks.state`
-    and the script that acts on it are two steps; a host that must refuse or write atomically with the
-    lock calls `tandem.lock_state` inside that script. When it reserves by `acquire` and then reads its
-    own state again, it releases the lock if that state says another claim came first.
-13. **A holder is an id, never a name, an e-mail address or content.** tandem writes the holder as
-    `holder_id` in its lines, so a holder that names a person puts that person in the log.
-14. **A `take` that raised `StoreError` may still have granted a hold.** The script may have run and only
-    the reply been lost, and the hold then occupies its slots until `lasts` runs out. The host treats the
-    take as refused and does not retry in a loop that would fill the pool.
-15. **The same `lasts` for every pod of a family.** A hold's expiry is stamped with the taking pod's `lasts`,
-    and each granted take sets the whole family key's expiry to that pod's `lasts`. A pod with a shorter
-    `lasts` therefore drops every other pod's holds early, once the key runs out, and the cap is exceeded; a
-    longer one only keeps the key alive past expired holds, which a take still prunes by score.
-16. **After a Redis restart a cap can be exceeded by the lost holds for at most `lasts`.** Slots read no
-    epoch, so takes are granted at once, and the host accepts that overshoot.
-    A host that moves an existing limiter onto `Slots` counts in two places while old and new pods run
-    side by side, so each cap can be reached twice over for that deploy window; a change of `family` or
-    `key_prefix` does the same.
-17. **A take costs O(live holds of the family).** A pool that every take includes is bounded by its cap, and
-    nothing bounds a family whose takes name pools that other takes leave out.
+1. **Give the client a `Retry`, so the re-read at `on_resync` survives a Redis restart and a failed `publish` ends.**
+   The client is the host's own. After a restart it can still hold stale pooled connections, so the first
+   command of that re-read fails with `ConnectionError` on a default `redis.asyncio` client. The client
+   therefore carries a `Retry`, as in the quick start, with `retries >= 0` and `socket_timeout` and
+   `socket_connect_timeout` set so that every command, `publish` included, ends in a bounded time. On
+   redis-py 5.x the client also passes `retry_on_error` with `ConnectionError` and `TimeoutError`, or its
+   `Retry` replays nothing, a lost reply included; redis-py 8 retries those two without it. A failed `publish`
+   leaves its delivery uncertain, so the host publishes the address again, which only causes a duplicate
+   wake, or has its readers re-read on a period.
+2. **Fence the effect of a claimed deadline with your own version, because only the host's store can refuse it.**
+   A due key reaches a handler at least once and each key has at most one valid claim at a time, yet a
+   handler that pauses past its claim runs beside the next worker after a takeover. The host checks and
+   writes its effect against a version or generation of its own, in one atomic step of its own store, so the
+   older handler's effect is refused.
+3. **Reconcile the deadlines after a Redis restart, because what they guard is the host's durable state.** A
+   restart takes every pending deadline and every claim with it. The host derives the deadlines its durable
+   state needs and `set`s them again at start and after it notices a restart, for example at an `on_resync` call.
+4. **One `kept` per holder, because what "alive" means for a holder is the host's own meaning.** Several pods
+   may renew one holder when "any of them is alive" is the intended meaning: `renew` is atomic, and the lease
+   then cannot tell them apart. A `kept` ends the shared generation at its exit, so only one pod runs it.
+5. **The same `lasts` and `claim_for` for every pod of a family, because the host's configuration sets them.**
+   The lease and the claim are measured by the pod that reads them; pods that differ read each other's
+   leases and claims by their own span.
+6. **Fence a lease's effects with its generation, compared inside the host's own atomic write.** Only the
+   host's store can refuse the stale effect; a generation is random and compared only by equality.
+7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state.** A restart takes
+   every lease, lapse and claim with it: a lapse in flight is never delivered, and an absent lease reads
+   UNKNOWN for `lasts` and then GONE. The host re-derives what it must free from its durable state, at its
+   reconcile period, and reads GONE as the signal that nobody renews.
+8. **Keep the generation and stop at the first `extend` or `release` that returns False, because the work under
+   the lock is the host's own.** The lock is then lost or ended, and whoever kept working under it fences its
+   effects with the generation, as in duty 6. A reply lost under the client's `Retry` is replayed as
+   [LOCK-10] and [LOCK-11] state.
+9. **Extend before `lasts` run out, with the same `lasts` for every pod of a family, because only the holder
+   knows it still works.** A holder that pauses past `lasts` loses its lock to the next `acquire`. The span
+   is measured by the pod that reads it.
+10. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`, because
+    that script is the host's own atomic step.** `locks.state` and the script that acts on it are two steps; a
+    host that must refuse or write atomically with the lock calls `tandem.lock_state` inside that script. When
+    it reserves by `acquire` and then reads its own state again, it releases the lock if that state says
+    another claim came first.
+11. **A holder is an id, never a name, an e-mail address or content, because the host decides what it
+    names.** tandem writes the holder as `holder_id` in its lines, so a holder that names a person puts that
+    person in the log.

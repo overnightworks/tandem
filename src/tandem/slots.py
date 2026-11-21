@@ -16,10 +16,23 @@ logger: logging.Logger = logging.getLogger(__name__)
 
 _TOKEN_BYTES = 16  # 128 random bits per hold
 
+# The family key expires with its latest hold, whichever pod's `lasts` set it, so no hold is dropped
+# early and the key never outlives its last hold. An expiry in the past deletes the key.
+_EXPIRE_WITH_LATEST_HOLD = """
+local function expire_with_latest_hold()
+  local latest = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+  if #latest > 0 then
+    redis.call('PEXPIREAT', KEYS[1], latest[2])
+  end
+end
+"""
+
 # ARGV: `lasts` in ms, the hold's random part, then each pool followed by its cap. The member of a
 # hold is `cjson.encode` of {random part, pool...}; it is the token the host keeps. A replay finds
 # its member and replies the same token. Replies the token, or nil when any pool is full.
-_TAKE = """
+_TAKE = (
+    _EXPIRE_WITH_LATEST_HOLD
+    + """
 local now_ms = tandem.now_ms()
 local lasts_ms = tonumber(ARGV[1])
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now_ms)
@@ -46,26 +59,31 @@ for pool, cap in pairs(caps) do
   end
 end
 redis.call('ZADD', KEYS[1], now_ms + lasts_ms, token)
-redis.call('PEXPIRE', KEYS[1], lasts_ms)
+expire_with_latest_hold()
 return token
 """
+)
 
 # ARGV: the token. Only a live hold ends; an expired one is removed on the way.
-_RELEASE = """
+_RELEASE = (
+    _EXPIRE_WITH_LATEST_HOLD
+    + """
 local expires_ms = redis.call('ZSCORE', KEYS[1], ARGV[1])
 redis.call('ZREM', KEYS[1], ARGV[1])
+expire_with_latest_hold()
 if expires_ms and tonumber(expires_ms) > tandem.now_ms() then
   return 1
 end
 return 0
 """
+)
 
 
 class Slots:
     def __init__(self, redis: Client, *, key_prefix: str, family: str, lasts: timedelta) -> None:
         """The slots of one `family` in the app of `key_prefix`.
 
-        A hold lasts `lasts` after its take. Every pod of a family passes the same `lasts`.
+        A hold lasts `lasts` after its take, whichever pod of the family took it.
         `key_prefix` and `family` are each one segment (`checked_segment`) and `lasts` is a positive
         `timedelta`.
         """

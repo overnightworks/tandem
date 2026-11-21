@@ -31,7 +31,7 @@ The operator and the agents that build and run his apps: every app of his that p
 ## Deliberate non-goals
 
 - No storage of the host's state: tandem moves a wake, the host keeps the truth.
-- No delivery guarantee beyond "the host re-reads at each `on_resync`": pub/sub is at most once, and the
-  duties in the reference make up the rest.
+- No delivery guarantee beyond the host's re-read at each `on_resync`: pub/sub is at most once, and the
+  host's own truth and its fence make up the rest.
 - No client of its own: a host passes its `redis.asyncio.Redis` and keeps its pool, retry and timeouts.
 - No compatibility layers: a change that breaks its callers breaks cleanly and says so.

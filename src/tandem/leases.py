@@ -268,7 +268,9 @@ class Leases:
         """Keep `holder`'s lease for another `lasts`, starting one under a new generation if none
         is live.
 
-        A reply lost under the client's `Retry` can replay a renewal as `started=False`.
+        `started` is True whenever the generation this call proposed is the live one afterwards, so
+        a renewal that a reply lost under the client's `Retry` replayed still reads as the start it
+        was.
         """
         async with self._step_timer("lease_renewal.ended", holder):
             return await self._renew_untimed(holder)
@@ -279,7 +281,10 @@ class Leases:
             list[object],
             await self._renew.run(self._key_names(), self._arguments(holder, generation)),
         )
-        return Renewal(started=started == 1, generation=self._text(current))
+        live_generation = self._text(current)
+        return Renewal(
+            started=started == 1 or live_generation == generation, generation=live_generation
+        )
 
     async def end(self, holder: str, generation: str) -> bool:
         """End the live lease of `generation`, its lapse due now; else change nothing."""
