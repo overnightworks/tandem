@@ -108,7 +108,7 @@ again and an `on_resync` call precedes the next wake; a readable payload that is
 existing subscription, without one.
 
 [LAYOUT-12] The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`.
-[LAYOUT-13] These keys are disjoint from the channel and from every other kind. `claim_for` is the same for every pod of one kind. [DEADLINE-11] A claim whose
+[LAYOUT-13] These keys are disjoint from the channel and from every other kind. [DEADLINE-11] A claim whose
 reply is lost to a retry of the host's client expires after `claim_for` and then reaches a worker again. [DEADLINE-12] A `set` or `cancel` that the client's `Retry` runs again cannot tell a replay from a new operation: if another pod re-armed the key in between, a replayed `cancel` removes the new deadline and a replayed `set` overwrites its due time or invalidates its claim.
 
 ## What tandem logs
@@ -183,9 +183,13 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
 4. **One `kept` per holder, because what "alive" means for a holder is the host's own meaning.** Several pods
    may renew one holder when "any of them is alive" is the intended meaning: `renew` is atomic, and the lease
    then cannot tell them apart. A `kept` ends the shared generation at its exit, so only one pod runs it.
-5. **The same `lasts` and `claim_for` for every pod of a family, because the host's configuration sets them.**
-   The lease and the claim are measured by the pod that reads them; pods that differ read each other's
-   leases and claims by their own span.
+5. **One `lasts` per family, kept once in configuration every pod of the family reads, because the span is the
+   host's own truth.** Every write stamps its end as Redis time plus the writing pod's span, and every pod
+   reads that stored end, so a live lease, lock or claim reads alike on every pod; a lease that several pods renew (duty 4)
+   lasts by its latest renewal's span. The reading pod's own `lasts` decides only how long it reads an absent
+   lease as UNKNOWN, and `Roster.settled` as False, after a Redis restart (`tandem.epoch_settled`; [LEASE-8],
+   [LEASE-10]), so a pod with a shorter `lasts` may read a lost lease GONE early by at most the difference,
+   under the host's fence (duty 6).
 6. **Fence a lease's effects with its generation, compared inside the host's own atomic write.** Only the
    host's store can refuse the stale effect; a generation is random and compared only by equality.
 7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state and only the host
@@ -201,9 +205,13 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    the lock is the host's own.** The lock is then lost or ended, and whoever kept working under it fences its
    effects with the generation, as in duty 6. A reply lost under the client's `Retry` is replayed as
    [LOCK-10] and [LOCK-11] state.
-9. **Extend before `lasts` run out, with the same `lasts` for every pod of a family, because only the holder
-   knows it still works.** A holder that pauses past `lasts` loses its lock to the next `acquire`. The span
-   is measured by the pod that reads it.
+9. **Extend before `lasts` run out, with one `lasts` per family kept once in configuration every pod reads,
+   because only the holder knows it still works.** A holder that pauses past `lasts` loses its lock to the
+   next `acquire`. Every write stamps its end as Redis time plus the writing pod's span, and every pod reads
+   that stored end, so a live lease, lock or claim reads alike on every pod. The reading pod's own `lasts` decides only how
+   long it reads an absent lock as UNKNOWN after a Redis restart (`tandem.epoch_settled`; [LOCK-4], [LOCK-8]),
+   so a pod with a shorter `lasts` may read a lost lock free early by at most the difference, under the
+   host's fence (duty 8).
 10. **Read a lock the host's own script depends on with `tandem.lock_state`, never with `locks.state`, because
     that script is the host's own atomic step.** `locks.state` and the script that acts on it are two steps; a
     host that must refuse or write atomically with the lock calls `tandem.lock_state` inside that script. When

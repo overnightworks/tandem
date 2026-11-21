@@ -15,7 +15,8 @@ not grow its own. An app that runs in several pods uses it for five things:
 
 Its aim: a host keeps only its own truth and the fence that refuses a stale effect in its own store. Every other
 rule that keeps its pods in line is tandem's and made once, such as when a pod must read again, noticing that
-Redis has forgotten what it held, and one span for a hold on every pod alike, so no app keeps a copy of it.
+Redis has forgotten what it held, and when a hold ends: on Redis's clock, by the span of the pod that wrote it,
+so every pod reads a live hold alike. The span itself is the host's own truth, set once for all its pods.
 
 It carries addresses and generations and never contents: the truth stays in the host's own store. A fix to
 how a wake is lost or doubled, or how a lease lapses, is made once, and every app gets it by taking the next
