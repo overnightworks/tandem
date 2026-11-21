@@ -1,8 +1,0 @@
-claim_id = "02df17c2f37745d7b9b878900e410b43"
-agent = "Claude f8db51b8-c5eb-43b5-8340-b682a6bcfe6a"
-role = "builder"
-base = "0a1b0e6ac6ec26a2c322eb1a3f7e7c96afe53bf2"
-branch = "claude/issue-78-leases-report-a-replayed-renewal-as-a-st"
-scope = ["README.md", "docs/VISION.md", "docs/reference.md", "src/tandem/leases.py", "src/tandem/slots.py", "src/tandem/testing.py", "tests"]
-opened_commit = "e160c2d9493c7a1fe4eb80c86ba482ac40fa2c01"
-whole_reason = "Two small fixes and the duty list they shorten must land together so the reference never names a duty tandem already owns."
