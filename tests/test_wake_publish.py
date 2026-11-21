@@ -11,6 +11,7 @@ from tests.support.host import ScenarioHost
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
+from tests.support.waiting import within
 
 
 async def _publisher_through(
@@ -88,7 +89,7 @@ async def test_a_publish_whose_reply_is_lost_is_sent_again_under_the_clients_ret
 async def test_a_publish_whose_replies_are_all_lost_fails_once_the_clients_retry_gives_up(
     proxy: TcpProxy, make_client: Callable[..., Redis], redis_url: str, key_prefix: str
 ):
-    """Spec: WAKE-6."""
+    """Spec: WAKE-6, WAKE-7."""
     retrying = make_client(proxy.url, retry=Retry(NoBackoff(), 2), socket_timeout=0.3)
     await retrying.ping()
     publisher = WakeChannel(retrying, key_prefix=key_prefix)
@@ -96,8 +97,9 @@ async def test_a_publish_whose_replies_are_all_lost_fails_once_the_clients_retry
         await reader.next_resynced()
         proxy.drop_replies()
 
+        bounded_publish = within(publisher.publish("orders/7"))
         with pytest.raises(StoreError):
-            await publisher.publish("orders/7")
+            await bounded_publish
 
         await WakeChannel(make_client(redis_url), key_prefix=key_prefix).publish("barrier")
         wakes = [await reader.next_wake()]

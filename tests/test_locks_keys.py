@@ -7,6 +7,8 @@ from redis.asyncio import Redis
 from tandem import Deadlines, Leases, Locks
 from tandem.keys import deadline_keys, lease_keys, lock_keys, wake_channel
 from tests.support.locks import expiry_of
+from tests.support.slots import keys_of
+from tests.support.strings import ANY_STRINGS
 
 
 @pytest.mark.parametrize("name", ["x", "epoch", "wake", "d", "l", "lock", "expiry", "generation"])
@@ -72,3 +74,23 @@ def test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming
 
     with pytest.raises(ValueError, match=argument):
         Locks(client, **{**arguments, argument: value})  # pyright: ignore[reportArgumentType] - the case passes a wrong type on purpose
+
+
+@pytest.mark.parametrize("name", ANY_STRINGS)
+async def test_a_name_may_be_any_string_and_is_never_a_key_segment(
+    name: str,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_locks: Callable[..., Locks],
+    observer: Redis,
+    key_prefix: str,
+):
+    """Spec: LOCK-2, LAYOUT-5."""
+    locks = new_locks(make_client(redis_url))
+    keys = lock_keys(key_prefix, "gpu")
+
+    generation = await locks.acquire(name)
+
+    assert generation is not None
+    assert (await locks.state(name)).generation == generation
+    assert await keys_of(observer, key_prefix) == {keys.epoch, keys.expiry, keys.generation}

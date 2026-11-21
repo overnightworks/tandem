@@ -4,9 +4,10 @@ import pytest
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
+from redis.exceptions import RedisError
 
-from tandem import Deadlines, Script, StoreError, Wake, WakeChannel, wake_channel
-from tests.support.deadlines import KEYS_OF_THE_SCRIPT, key_names, state_of
+from tandem import LUA_KIT, Deadlines, Script, StoreError, Wake, WakeChannel, wake_channel
+from tests.support.deadlines import KEYS_OF_THE_SCRIPT, key_names, redis_ms, state_of
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
 
@@ -111,11 +112,13 @@ async def test_a_script_runs_again_after_the_servers_script_cache_is_flushed(
 async def test_a_script_that_redis_refuses_raises_store_error(
     url_denying: Callable[[str], Awaitable[str]], make_client: Callable[..., Redis]
 ):
-    """Spec: SCRIPT-2."""
+    """Spec: SCRIPT-2, STORE-2."""
     script = Script(make_client(await url_denying("evalsha")), "return 7")
 
-    with pytest.raises(StoreError):
+    with pytest.raises(StoreError) as refusal:
         await script.run([], [])
+
+    assert isinstance(refusal.value.__cause__, RedisError)
 
 
 async def test_a_script_whose_reply_never_comes_raises_store_error(
@@ -126,6 +129,98 @@ async def test_a_script_whose_reply_never_comes_raises_store_error(
     await client.ping()
     script = Script(client, "return 7")
     proxy.drop_replies()
+
+    with pytest.raises(StoreError):
+        await script.run([], [])
+
+
+async def test_now_ms_is_the_redis_clock_in_milliseconds(
+    redis_url: str, make_client: Callable[..., Redis]
+):
+    """Spec: LUA-1."""
+    client = make_client(redis_url)
+    before = await redis_ms(client)
+
+    reported = await Script(client, "return tandem.now_ms()").run([], [])
+
+    assert isinstance(reported, int)
+    assert before <= reported <= await redis_ms(client)
+
+
+async def test_a_script_that_fails_after_a_write_keeps_the_write(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    """Spec: SCRIPT-3."""
+    client = make_client(redis_url)
+    script = Script(client, "redis.call('SET', KEYS[1], 'written')\nerror('fails after the write')")
+
+    with pytest.raises(StoreError):
+        await script.run([f"{key_prefix}:kept"], [])
+
+    assert await client.get(f"{key_prefix}:kept") == b"written"
+
+
+_COUNT_RUNS = "if ARGV[1] == 'warm-up' then return 0 end\nreturn redis.call('INCR', KEYS[1])"
+
+
+type ScriptOnLossyLink = Callable[[int], Awaitable[tuple[Script, str]]]
+
+
+@pytest.fixture
+def script_on_lossy_link(
+    proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str
+) -> ScriptOnLossyLink:
+    async def arrange(retries: int) -> tuple[Script, str]:
+        counter = f"{key_prefix}:runs"
+        client = make_client(proxy.url, retry=Retry(NoBackoff(), retries), socket_timeout=0.3)
+        script = Script(client, _COUNT_RUNS)
+        await script.run([counter], ["warm-up"])  # loaded, so no reply is lost as NOSCRIPT
+        proxy.drop_replies_of_open_connections()
+        return script, counter
+
+    return arrange
+
+
+async def test_a_client_without_retries_raises_after_a_lost_reply_and_the_script_ran_once(
+    script_on_lossy_link: ScriptOnLossyLink, observer: Redis
+):
+    """Spec: SCRIPT-3."""
+    script, counter = await script_on_lossy_link(0)
+
+    with pytest.raises(StoreError):
+        await script.run([counter], ["run"])
+
+    assert int(await observer.get(counter) or 0) == 1
+
+
+async def test_a_client_with_retries_runs_the_script_twice_after_a_lost_reply(
+    script_on_lossy_link: ScriptOnLossyLink, observer: Redis
+):
+    """Spec: SCRIPT-3."""
+    script, counter = await script_on_lossy_link(3)
+
+    await script.run([counter], ["run"])
+
+    assert int(await observer.get(counter) or 0) == 2
+
+
+async def test_an_error_in_a_script_is_reported_at_a_line_offset_by_the_kit(
+    redis_url: str, make_client: Callable[..., Redis]
+):
+    """Spec: SCRIPT-4."""
+    script = Script(make_client(redis_url), "error('fails on the first line')")
+
+    with pytest.raises(StoreError) as failure:
+        await script.run([], [])
+
+    assert f"user_script:{LUA_KIT.count(chr(10)) + 1}:" in str(failure.value)
+
+
+async def test_a_script_that_starts_with_a_shebang_is_refused(
+    redis_url: str, make_client: Callable[..., Redis]
+):
+    """Spec: SCRIPT-4."""
+    script = Script(make_client(redis_url), "#!lua\nreturn 1")
 
     with pytest.raises(StoreError):
         await script.run([], [])

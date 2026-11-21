@@ -19,6 +19,7 @@ LATER = timedelta(seconds=60)
 _SET_IN_A_SCRIPT = KEYS_OF_THE_SCRIPT + "tandem.deadline_set(keys, ARGV[1], ARGV[2])"
 
 Rearm = Callable[[Redis, Deadlines, str], Awaitable[None]]
+TwoPods = tuple[Redis, Deadlines, Deadlines]
 
 
 async def _rearm_through_deadlines(client: Redis, deadlines: Deadlines, key: str) -> None:
@@ -27,6 +28,14 @@ async def _rearm_through_deadlines(client: Redis, deadlines: Deadlines, key: str
 
 async def _rearm_through_a_script(client: Redis, deadlines: Deadlines, key: str) -> None:
     await Script(client, _SET_IN_A_SCRIPT).run(key_names(deadlines), [key, 60_000])
+
+
+@pytest.fixture
+def two_pods(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+) -> TwoPods:
+    client = make_client(redis_url)
+    return client, new_deadlines(client), new_deadlines(make_client(redis_url))
 
 
 async def _claimed_key(client: Redis, deadlines: Deadlines) -> Due:
@@ -51,7 +60,7 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
     claim_for: timedelta,
     claim_runs_out: bool,
 ):
-    """Spec: DEADLINE-4, DEADLINE-9, LUA-3."""
+    """Spec: DEADLINE-4, DEADLINE-9, DEADLINE-12, LUA-3."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client, claim_for=claim_for)
     old = await _claimed_key(client, deadlines)
@@ -156,3 +165,34 @@ async def test_deadline_state_is_nil_once_a_key_is_done_cancelled_or_never_set(
             assert await deadlines.cancel("room-1") is True
 
     assert await state_of(client, deadlines, "room-1") is None
+
+
+async def test_a_cancel_the_client_runs_again_removes_the_deadline_another_pod_armed_in_between(
+    two_pods: TwoPods,
+):
+    """Spec: DEADLINE-12."""
+    client, first_pod, other_pod = two_pods
+    await first_pod.set("room-1", LATER)
+    assert await first_pod.cancel("room-1") is True
+    await other_pod.set("room-1", LATER)
+
+    replayed = await first_pod.cancel("room-1")
+
+    assert replayed is True
+    assert await state_of(client, first_pod, "room-1") is None
+
+
+async def test_a_set_the_client_runs_again_overwrites_the_due_time_another_pod_armed_in_between(
+    two_pods: TwoPods,
+):
+    """Spec: DEADLINE-12."""
+    client, first_pod, other_pod = two_pods
+    await first_pod.set("room-1", LATER)
+    await other_pod.set("room-1", LATER * 2)
+    before_replay = await redis_ms(client)
+
+    await first_pod.set("room-1", LATER)
+
+    state = await state_of(client, first_pod, "room-1")
+    assert state is not None
+    assert state[1] < before_replay + 2 * 60_000 - 1_000

@@ -12,7 +12,7 @@ from tandem.wake import _Resubscribed
 from tests.support.backends import Backend
 from tests.support.logs import LogLines
 from tests.support.reader import Reader, Resynced
-from tests.support.waiting import BOUND, until
+from tests.support.waiting import BOUND, until, within
 
 
 async def test_resubscribed_comes_first_and_every_wake_after_it(backend: Backend, key_prefix: str):
@@ -264,3 +264,56 @@ async def test_a_payload_that_is_no_utf8_is_skipped_and_the_next_wake_still_arri
     assert skipped["payload_bytes"] == len(malformed)
     log_lines.assert_none_holds(malformed_text)
     log_lines.assert_none_holds("orders/7")
+
+
+async def test_channels_of_distinct_prefixes_on_one_redis_never_hear_each_other(
+    backend: Backend, key_prefix: str
+):
+    """Spec: WAKE-21."""
+    client = backend.new_client()
+    skat = WakeChannel(client, key_prefix=key_prefix)
+    agents = WakeChannel(client, key_prefix=f"{key_prefix}-agents")
+    async with Reader(skat) as skat_reader, Reader(agents) as agents_reader:
+        await skat_reader.next_resynced()
+        await agents_reader.next_resynced()
+
+        await skat.publish("skat-first")
+        await agents.publish("agents-first")
+        await skat.publish("skat-last")
+        await agents.publish("agents-last")
+
+        assert [await skat_reader.next_wake() for _ in range(2)] == [
+            Wake("skat-first"),
+            Wake("skat-last"),
+        ]
+        assert [await agents_reader.next_wake() for _ in range(2)] == [
+            Wake("agents-first"),
+            Wake("agents-last"),
+        ]
+
+
+async def _next_message(tap: PubSub, message_type: str) -> dict[str, bytes]:
+    while (message := await tap.get_message(timeout=1)) is None or message["type"] != message_type:
+        pass
+    return message
+
+
+async def test_a_wake_on_a_channel_of_another_version_segment_reaches_no_reader(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    """Spec: WAKE-22."""
+    publisher = make_client(redis_url)
+    foreign_channel = f"{key_prefix}:foreign-version:wake"
+    async with publisher.pubsub() as tap:
+        await tap.subscribe(wake_channel(key_prefix))
+        await within(_next_message(tap, "subscribe"))
+        await WakeChannel(publisher, key_prefix=key_prefix).publish("foreign")
+        message = await within(_next_message(tap, "message"))
+    async with Reader(WakeChannel(make_client(redis_url), key_prefix=key_prefix)) as reader:
+        await reader.next_resynced()
+
+        await publisher.publish(foreign_channel, message["data"])
+        await WakeChannel(publisher, key_prefix=key_prefix).publish("own")
+
+        assert await reader.next_wake() == Wake("own")
+        assert reader.drain() == []

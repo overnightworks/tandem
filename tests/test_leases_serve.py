@@ -575,3 +575,49 @@ async def test_serve_lapses_takes_no_claimer_argument(
 
     with pytest.raises(TypeError):
         leases.serve_lapses(Handled(), every=SERVING_EVERY, claimer="pod-1")  # pyright: ignore[reportCallIssue]
+
+
+async def test_a_handler_that_is_cancelled_writes_its_line_with_the_cancelled_outcome(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    """Spec: LOG-10, LOG-18."""
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await leases.renew("pod-a")
+    running = Handled(hold=True)
+
+    async with serving(leases, running) as task:
+        await running.received()
+        task.cancel()
+        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert line["outcome"] == Outcome.CANCELLED
+    assert line["holder_id"] == "pod-a"
+
+
+async def test_a_lapse_that_reaches_two_handlers_writes_a_line_for_each(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    """Spec: LOG-23."""
+    first = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    second = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    await first.renew("pod-a")
+    running, replay = Handled(hold=True), Handled(hold=True)
+
+    async with serving(first, running):
+        await running.received()
+        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        async with serving(second, replay):
+            await replay.received()
+            running.release()
+            replay.release()
+            lines = await log_lines.await_of("lapse_handling.ended", _LOGGER, count=2)
+
+    assert [line["holder_id"] for line in lines[:2]] == ["pod-a", "pod-a"]

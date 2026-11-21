@@ -3,10 +3,13 @@ from datetime import timedelta
 
 import pytest
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 
-from tandem import Deadlines
+from tandem import Deadlines, StoreError
 from tests.support.backends import Backend
 from tests.support.deadlines import claim_when_due, redis_ms, state_of, until_redis_ms
+from tests.support.proxy import TcpProxy
 
 DUE_IN = timedelta(milliseconds=300)
 SHORT_CLAIM = timedelta(milliseconds=300)
@@ -114,3 +117,30 @@ async def test_claim_due_takes_no_claimer_argument(
 
     with pytest.raises(TypeError):
         deadlines.claim_due(limit=10, claimer="pod-1")  # pyright: ignore[reportCallIssue]
+
+
+async def test_a_claim_whose_reply_is_lost_expires_after_claim_for_and_reaches_a_worker_again(
+    proxy: TcpProxy,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+):
+    """Spec: DEADLINE-11."""
+    client = make_client(redis_url)
+    losing = new_deadlines(
+        make_client(proxy.url, retry=Retry(NoBackoff(), 0), socket_timeout=0.3),
+        claim_for=SHORT_CLAIM,
+    )
+    other = new_deadlines(client, claim_for=SHORT_CLAIM)
+    assert await losing.claim_due(limit=10) == []  # warms the script
+    await other.set("room-1", timedelta(0))
+    proxy.drop_replies_of_open_connections()
+
+    with pytest.raises(StoreError):
+        await losing.claim_due(limit=10)
+
+    state = await state_of(client, other, "room-1")
+    assert state is not None
+    assert state[0] == "claimed"
+    (reclaimed,) = await claim_when_due(other)
+    assert reclaimed.key == "room-1"

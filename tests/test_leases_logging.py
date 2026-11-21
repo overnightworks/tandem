@@ -1,4 +1,6 @@
+import asyncio
 import logging
+import sys
 from collections.abc import Awaitable, Callable
 
 import pytest
@@ -7,6 +9,7 @@ from redis.asyncio import Redis
 
 from tandem import Leases, StoreError
 from tests.support.logs import LogLines
+from tests.support.waiting import within
 
 type LeaseCall = Callable[[Leases], Awaitable[object]]
 
@@ -67,3 +70,50 @@ async def test_a_host_with_only_a_standard_handler_gets_the_lines_at_its_level_w
     for record in written:
         assert record.__dict__["lease_family"] == "owner"
         assert record.__dict__["outcome"] == Outcome.OK
+
+
+_HOST_THAT_NEVER_CONFIGURES_LOGGING = """
+import asyncio, logging, sys
+from datetime import timedelta
+import structlog
+from redis.asyncio import Redis
+from tandem import Leases, WakeChannel
+
+async def main(url, prefix):
+    client = Redis.from_url(url)
+    span = timedelta(seconds=30)
+    leases = Leases(client, key_prefix=prefix, family="owner", lasts=span, claim_for=span)
+    await leases.renew("pod-a")
+    await WakeChannel(client, key_prefix=prefix).publish("orders/7")
+    await client.aclose()
+
+root = logging.getLogger()
+before = (list(root.handlers), root.level)
+asyncio.run(main(*sys.argv[1:]))
+print(structlog.is_configured(), (list(root.handlers), root.level) == before)
+"""
+
+
+async def test_using_tandem_configures_neither_logline_nor_structlog_nor_the_root_logger(
+    redis_url: str, key_prefix: str
+):
+    """Spec: LOG-2."""
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "-I",
+        "-c",
+        _HOST_THAT_NEVER_CONFIGURES_LOGGING,
+        redis_url,
+        key_prefix,
+        stdout=asyncio.subprocess.PIPE,
+    )
+
+    try:
+        stdout, _ = await within(process.communicate())
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+
+    assert process.returncode == 0
+    assert stdout.decode().split() == ["False", "True"]

@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from tandem import Deadlines, WakeChannel
 from tests.support.backends import Backend
 from tests.support.deadlines import claim_when_due
+from tests.support.strings import ANY_STRINGS
 
 
 @pytest.mark.parametrize(
@@ -74,3 +75,17 @@ async def test_kinds_named_like_the_fixed_tokens_share_a_prefix_with_a_wake_chan
 
 def _structures_of_a_claimed_key(deadlines: Deadlines) -> list[str]:
     return [deadlines.keys.claimed, deadlines.keys.claim]
+
+
+@pytest.mark.parametrize("key", ANY_STRINGS)
+async def test_a_deadline_key_may_be_any_string(
+    key: str, backend: Backend, new_deadlines: Callable[..., Deadlines]
+):
+    """Spec: DEADLINE-2."""
+    deadlines = new_deadlines(backend.new_client())
+    await deadlines.set(key, timedelta(0))
+
+    claimed = await claim_when_due(deadlines)
+
+    assert [due.key for due in claimed] == [key]
+    assert await deadlines.done(claimed[0]) is True
