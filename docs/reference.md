@@ -185,11 +185,11 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    then cannot tell them apart. A `kept` ends the shared generation at its exit, so only one pod runs it.
 5. **One `lasts` per family, kept once in configuration every pod of the family reads, because the span is the
    host's own truth.** Every write stamps its end as Redis time plus the writing pod's span, and every pod
-   reads that stored end, so a live lease reads alike on every pod; a lease that several pods renew (duty 4)
+   reads that stored end, so a live lease, lock or claim reads alike on every pod; a lease that several pods renew (duty 4)
    lasts by its latest renewal's span. The reading pod's own `lasts` decides only how long it reads an absent
    lease as UNKNOWN, and `Roster.settled` as False, after a Redis restart (`tandem.epoch_settled`; [LEASE-8],
    [LEASE-10]), so a pod with a shorter `lasts` may read a lost lease GONE early by at most the difference,
-   under the host's fence (duty 6). `claim_for` is the claiming pod's own and needs no match.
+   under the host's fence (duty 6).
 6. **Fence a lease's effects with its generation, compared inside the host's own atomic write.** Only the
    host's store can refuse the stale effect; a generation is random and compared only by equality.
 7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state and only the host
@@ -208,7 +208,7 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
 9. **Extend before `lasts` run out, with one `lasts` per family kept once in configuration every pod reads,
    because only the holder knows it still works.** A holder that pauses past `lasts` loses its lock to the
    next `acquire`. Every write stamps its end as Redis time plus the writing pod's span, and every pod reads
-   that stored end, so a live lock reads alike on every pod. The reading pod's own `lasts` decides only how
+   that stored end, so a live lease, lock or claim reads alike on every pod. The reading pod's own `lasts` decides only how
    long it reads an absent lock as UNKNOWN after a Redis restart (`tandem.epoch_settled`; [LOCK-4], [LOCK-8]),
    so a pod with a shorter `lasts` may read a lost lock free early by at most the difference, under the
    host's fence (duty 8).
