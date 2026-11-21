@@ -4,11 +4,14 @@ from datetime import timedelta
 
 import pytest
 from redis.asyncio import Redis
+from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 
 from tandem import Leases, Liveness, Renewal
 from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import Handled, liveness_of, serving, until_gone
+from tests.support.proxy import TcpProxy
 from tests.support.strings import ANY_STRINGS
 from tests.support.waiting import until
 
@@ -171,3 +174,22 @@ async def test_a_holder_may_be_any_string(
 
     assert renewal.started is True
     assert await liveness_of(leases, holder) is Liveness.ALIVE
+
+
+async def test_a_renewal_whose_reply_is_lost_is_replayed_as_not_started_with_the_started_generation(
+    proxy: TcpProxy,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+):
+    """Spec: LEASE-22."""
+    direct = new_leases(make_client(redis_url))
+    retrying = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 3), socket_timeout=0.3))
+    # A cold script loses its reply as NOSCRIPT, before anything ran; the warm-up loads it.
+    await retrying.renew("warm-up")
+    proxy.drop_replies_of_open_connections()
+
+    renewal = await retrying.renew("pod-a")
+
+    assert renewal.started is False
+    assert (await direct.state(["pod-a"]))["pod-a"].generation == renewal.generation
