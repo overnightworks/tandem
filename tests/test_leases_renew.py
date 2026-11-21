@@ -2,12 +2,14 @@ import asyncio
 from collections.abc import Callable
 from datetime import timedelta
 
+import pytest
 from redis.asyncio import Redis
 
 from tandem import Leases, Liveness, Renewal
 from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import Handled, liveness_of, serving, until_gone
+from tests.support.strings import ANY_STRINGS
 from tests.support.waiting import until
 
 LASTS = timedelta(milliseconds=300)
@@ -153,3 +155,19 @@ async def test_the_sweep_drops_a_lapsed_holder_from_the_generation_record(
 
     async with serving(leases, Handled()):
         await until(swept)
+
+
+@pytest.mark.parametrize("holder", ANY_STRINGS)
+async def test_a_holder_may_be_any_string(
+    holder: str,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+):
+    """Spec: LEASE-3."""
+    leases = new_leases(make_client(redis_url))
+
+    renewal = await leases.renew(holder)
+
+    assert renewal.started is True
+    assert await liveness_of(leases, holder) is Liveness.ALIVE

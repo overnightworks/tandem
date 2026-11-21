@@ -5,6 +5,7 @@ import pytest
 
 from tandem import Slots
 from tests.support.backends import Backend
+from tests.support.strings import ANY_STRINGS
 
 
 @pytest.mark.parametrize("cap", [1, 3])
@@ -82,3 +83,18 @@ async def test_concurrent_takes_behind_a_barrier_never_exceed_a_cap(
     results = await asyncio.gather(*(contend(pod) for pod in pods))
 
     assert len([token for token in results if token is not None]) == cap
+
+
+@pytest.mark.parametrize("pool", ANY_STRINGS)
+async def test_a_pool_may_be_any_string(
+    pool: str, backend: Backend, new_slots: Callable[..., Slots]
+):
+    """Spec: SLOT-2."""
+    slots = new_slots(backend.new_client())
+
+    token = await slots.take({pool: 1})
+
+    assert token is not None
+    assert await slots.take({pool: 1}) is None
+    assert await slots.release(token) is True
+    assert await slots.take({pool: 1}) is not None

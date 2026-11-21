@@ -156,3 +156,38 @@ async def test_deadline_state_is_nil_once_a_key_is_done_cancelled_or_never_set(
             assert await deadlines.cancel("room-1") is True
 
     assert await state_of(client, deadlines, "room-1") is None
+
+
+async def test_a_cancel_the_client_runs_again_removes_the_deadline_another_pod_armed_in_between(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+):
+    """Spec: DEADLINE-12."""
+    client = make_client(redis_url)
+    first_pod = new_deadlines(client)
+    other_pod = new_deadlines(make_client(redis_url))
+    await first_pod.set("room-1", LATER)
+    assert await first_pod.cancel("room-1") is True
+    await other_pod.set("room-1", LATER)
+
+    replayed = await first_pod.cancel("room-1")
+
+    assert replayed is True
+    assert await state_of(client, first_pod, "room-1") is None
+
+
+async def test_a_set_the_client_runs_again_overwrites_the_due_time_another_pod_armed_in_between(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+):
+    """Spec: DEADLINE-12."""
+    client = make_client(redis_url)
+    first_pod = new_deadlines(client)
+    other_pod = new_deadlines(make_client(redis_url))
+    await first_pod.set("room-1", LATER)
+    await other_pod.set("room-1", LATER * 2)
+    before_replay = await redis_ms(client)
+
+    await first_pod.set("room-1", LATER)
+
+    state = await state_of(client, first_pod, "room-1")
+    assert state is not None
+    assert state[1] < before_replay + 2 * 60_000 - 1_000
