@@ -49,6 +49,30 @@ async def test_a_family_named_like_a_fixed_key_shares_no_key_and_meets_no_wrongt
 @pytest.mark.parametrize(
     ("argument", "value"),
     [
+        ("key_prefix", "Upper"),
+        ("key_prefix", "with:colon"),
+        ("key_prefix", ""),
+        ("family", "Upper"),
+        ("family", "with:colon"),
+        ("family", "-leading-dash"),
+        ("family", ""),
+    ],
+)
+def test_a_prefix_or_family_that_is_no_segment_fails_at_construction_naming_the_argument(
+    make_client: Callable[..., Redis], redis_url: str, argument: str, value: str
+):
+    """Spec: LEASE-1."""
+    arguments = {"key_prefix": "skat", "family": "owner"}
+    client = make_client(redis_url)
+    span = timedelta(seconds=30)
+
+    with pytest.raises(ValueError, match=argument):
+        Leases(client, lasts=span, claim_for=span, **{**arguments, argument: value})
+
+
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
         ("lasts", timedelta(0)),
         ("lasts", timedelta(seconds=-1)),
         ("lasts", 30),

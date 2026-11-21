@@ -66,6 +66,8 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 
 ## Redis layout and retries
 
+LAYOUT-1, LAYOUT-3, LAYOUT-8, LAYOUT-12 and WAKE-19 name literal keys and channels that only `tandem.keys` writes; no test restates them, so the review of a diff that changes `tandem.keys` is their proof, and the key-literal check keeps every other module from writing one.
+
 [LAYOUT-1] The leases of a family live in `<key_prefix>:tandem:v1:l:<family>:expiry` and `...:generation`, its lapse
 queue in `...:l:<family>:lapse:{due,claimed,claim}` and the app's epoch in `<key_prefix>:tandem:v1:epoch`.
 [LAYOUT-2] These keys are disjoint from the channel and the deadlines. [LEASE-21] Only the expiry decides ALIVE: a lapse that a handler claimed
