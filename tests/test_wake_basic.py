@@ -228,11 +228,11 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         await publisher.publish("a")
         await until(handled_count(1))
 
-        async def second_read_started() -> bool:
-            return channel.reads_started == 2
+        async def third_read_started() -> bool:
+            return channel.reads_started >= 3
 
-        # The second read sends its PING when it starts: its reply precedes "b" on the connection.
-        await until(second_read_started)
+        # The read after "a" sends its PING when it starts: its reply precedes "b".
+        await until(third_read_started)
         await publisher.publish("b")
         await until(handled_count(2))
 
