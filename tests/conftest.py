@@ -18,6 +18,7 @@ from tandem import Client, Deadlines, Leases, Locks, Slots
 from tandem.testing import settle_epoch
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
+from tests.support.deadlines import TwoPods
 from tests.support.locks import FAMILY
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
@@ -81,6 +82,15 @@ def new_deadlines(key_prefix: str) -> Callable[..., Deadlines]:
         return Deadlines(client, key_prefix=key_prefix, kind=kind, claim_for=claim_for)
 
     return build
+
+
+@pytest.fixture
+def two_pods(
+    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
+) -> TwoPods:
+    """One client with its deadlines, and the same kind's deadlines on a second client."""
+    client = make_client(redis_url)
+    return client, new_deadlines(client), new_deadlines(make_client(redis_url))
 
 
 @pytest.fixture

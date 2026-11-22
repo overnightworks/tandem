@@ -8,6 +8,7 @@ from tandem import Deadlines, Due, Script
 from tests.support.backends import Backend
 from tests.support.deadlines import (
     KEYS_OF_THE_SCRIPT,
+    TwoPods,
     claim_when_due,
     key_names,
     redis_ms,
@@ -19,7 +20,6 @@ LATER = timedelta(seconds=60)
 _SET_IN_A_SCRIPT = KEYS_OF_THE_SCRIPT + "tandem.deadline_set(keys, ARGV[1], ARGV[2])"
 
 Rearm = Callable[[Redis, Deadlines, str], Awaitable[None]]
-TwoPods = tuple[Redis, Deadlines, Deadlines]
 
 
 async def _rearm_through_deadlines(client: Redis, deadlines: Deadlines, key: str) -> None:
@@ -28,14 +28,6 @@ async def _rearm_through_deadlines(client: Redis, deadlines: Deadlines, key: str
 
 async def _rearm_through_a_script(client: Redis, deadlines: Deadlines, key: str) -> None:
     await Script(client, _SET_IN_A_SCRIPT).run(key_names(deadlines), [key, 60_000])
-
-
-@pytest.fixture
-def two_pods(
-    redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
-) -> TwoPods:
-    client = make_client(redis_url)
-    return client, new_deadlines(client), new_deadlines(make_client(redis_url))
 
 
 async def _claimed_key(client: Redis, deadlines: Deadlines) -> Due:

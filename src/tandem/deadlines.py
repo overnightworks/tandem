@@ -17,6 +17,21 @@ _KEYS = "local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}\n"
 
 _SET = _KEYS + "tandem.deadline_set(keys, ARGV[1], ARGV[2])"
 
+_ARM = _KEYS + "return tandem.deadline_arm(keys, ARGV[1], ARGV[2])"
+
+# ARGV: key, token, the next due in ms. The token is checked as `_DONE` checks it; `deadline_set`
+# then ends the claim and arms the key in the same script, so the key is never absent.
+_RECUR = (
+    _KEYS
+    + """
+if redis.call('HGET', keys.claim, ARGV[1]) ~= ARGV[2] then
+  return 0
+end
+tandem.deadline_set(keys, ARGV[1], ARGV[3])
+return 1
+"""
+)
+
 _CANCEL = _KEYS + "return tandem.deadline_cancel(keys, ARGV[1])"
 
 # ARGV: the most to claim, the claim's length in ms, then one fresh token per possible claim. Due
@@ -96,6 +111,8 @@ class DeadlineQueue:
         self._keys = keys
         self._claim_for_ms = milliseconds(checked_span(claim_for, argument="claim_for"))
         self._set = Script(redis, _SET)
+        self._arm = Script(redis, _ARM)
+        self._recur = Script(redis, _RECUR)
         self._cancel = Script(redis, _CANCEL)
         self._claim_due = Script(redis, _CLAIM_DUE)
         self._extend = Script(redis, _EXTEND)
@@ -109,6 +126,17 @@ class DeadlineQueue:
     async def set(self, key: str, due_in: timedelta) -> None:
         """Make `key` come due `due_in` from now on Redis TIME; a claim on `key` is invalidated."""
         await self._set.run(self._key_names(), [key, milliseconds(due_in)])
+
+    async def arm(self, key: str, due_in: timedelta) -> bool:
+        """Make `key` come due `due_in` from now on Redis TIME only when it neither waits nor is
+        claimed; True when this call armed it. A replay by the client's retry returns False."""
+        return await self._arm.run(self._key_names(), [key, milliseconds(due_in)]) == 1
+
+    async def recur(self, due: Due, due_in: timedelta) -> bool:
+        """Finish the claim and make its key come due `due_in` from now in one step; False, with
+        nothing changed, once the claim's token is gone."""
+        reply = await self._recur.run(self._key_names(), [due.key, due.claim, milliseconds(due_in)])
+        return reply == 1
 
     async def cancel(self, key: str) -> bool:
         """Remove `key`, waiting or claimed; True when there was something to remove."""
