@@ -1,7 +1,0 @@
-claim_id = "f98fa6ac040f454ea22a3369cf787f5e"
-agent = "Claude 3ac587c2-6e7b-482a-8e65-3753b7805733"
-role = "builder"
-base = "e385345b8208fdaa8e9d578c78ccf522b767a0d3"
-branch = "claude/issue-86-tandem-pins-quality-v0-23-1"
-scope = [".github/workflows/ci.yml", ".github/workflows/code-scanning.yml", ".github/workflows/release.yml"]
-opened_commit = "20ad8a569354eab7c419ca05864170be55af1412"
