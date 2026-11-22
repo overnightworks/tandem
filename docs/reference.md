@@ -15,6 +15,8 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `Wake(address, traceparent=None)` | A pod published `address` while it was in the trace `traceparent`; None when its sender had none. [WAKE-18] It is the sender's value as received: tandem validates nothing, and logline's `unit_trace`, which `following` wraps the handler in, starts a new trace for a malformed one. |
 | `Deadlines(redis, *, key_prefix, kind, claim_for)` | The deadlines of one `kind` of one app. [DEADLINE-1] `key_prefix` and `kind` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `claim_for` is a positive `timedelta`, the length of a claim; anything else (a `claim_for` that is no `timedelta` included) raises `ValueError` naming the argument. [DEADLINE-2] A deadline key is any string. |
 | `await deadlines.set(key, due_in)` | [DEADLINE-3] `key` comes due `due_in` after now on Redis `TIME` (a pod's clock is never read). [DEADLINE-4] A `key` that already waits is re-armed; a `key` that a worker holds is re-armed too and the claim is void, so that worker's later `done` returns False and leaves the new deadline. |
+| `await deadlines.arm(key, due_in)` | [DEADLINE-13] A `key` that neither waits nor is claimed comes due `due_in` after now on Redis `TIME`, and `arm` returns True. [DEADLINE-14] `arm` returns False and changes nothing for a `key` that waits, due or not, for a `key` a live claim holds (that holder's later `done` returns True), and for a `key` whose claim ran out and that nobody took over (the next `claim_due` takes it over). [DEADLINE-15] Of concurrent `arm`s on one absent key, exactly one returns True. |
+| `await deadlines.recur(due, due_in)` | [DEADLINE-17] Finishes `due`'s claim and makes its key come due `due_in` after now on Redis `TIME`, in one step, only while `due`'s token is the key's current one (the check `done` makes); True then. [DEADLINE-18] Once the token is gone (a takeover, a `set`, a `cancel`, a `done`, an earlier `recur`, a Redis restart) it returns False and changes nothing, so a new holder's claim stays and its `done` returns True. [DEADLINE-19] A key `recur` re-arms is never absent between its run and its next due time, so a concurrent `arm` of another pod returns False. |
 | `await deadlines.cancel(key)` | [DEADLINE-5] Removes `key`, waiting or claimed, and voids its claim. True when there was something to remove. |
 | `await deadlines.claim_due(*, limit)` | [DEADLINE-6] Claims at most `limit` keys that are due, and then keys whose claim ran out, each under a fresh random 128-bit token, and returns them as `Due`s. [DEADLINE-7] `limit` is at least 1, or it raises `ValueError` naming the argument. |
 | `await deadlines.extend(due)` | [DEADLINE-8] Holds the claim for another `claim_for`. False once its token is gone or the claim ran out. |
@@ -51,6 +53,7 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `tandem.now_ms()` | [LUA-1] Redis `TIME` in milliseconds. |
 | `tandem.epoch_settled(epoch_key, now_ms, lasts_ms)` | [LUA-2] Creates the app's epoch at `now_ms` when absent and returns true once `lasts_ms` have passed since it. |
 | `tandem.deadline_set(keys, key, due_in_ms)` | [LUA-3] The transition of `Deadlines.set`: the key waits for `due_in_ms` from now and its claim is void. Returns the due in ms. |
+| `tandem.deadline_arm(keys, key, due_in_ms)` | [LUA-8] The transition of `Deadlines.arm`: `deadline_set` only while `deadline_state` reads nil. Returns 1 when it armed, else 0. |
 | `tandem.deadline_cancel(keys, key)` | [LUA-4] The transition of `Deadlines.cancel`. Returns 1 or 0. |
 | `tandem.deadline_state(keys, key)` | [LUA-5] Reads without changing: `{'waiting', due_ms}` while the key waits, `{'claimed', claim_until_ms}` while a claim holds it, nil otherwise. A claim past its expiry that nobody took over still reads as claimed. |
 | `tandem.lock_state(keys, name, lasts_ms)` | [LUA-6] Reads a lock without changing it, apart from creating the epoch when absent. `keys` has the fields `epoch`, `expiry` and `generation` (`locks.keys`); `lasts_ms` is `locks.lasts` in ms. Returns `{'held', generation, expires_ms}` while a live lock holds `name`, `{'unknown'}` while it is absent and `lasts_ms` have not passed since the epoch, and nil when it is free. `if tandem.lock_state(...) then` therefore refuses unless the lock is free and settled, so a host's admit script reads the lock and writes its own state in one atomic step. |
@@ -110,6 +113,8 @@ existing subscription, without one.
 [LAYOUT-12] The deadlines of a kind live in `<key_prefix>:tandem:v1:d:<kind>:due`, `...:claimed` and `...:claim`.
 [LAYOUT-13] These keys are disjoint from the channel and from every other kind. [DEADLINE-11] A claim whose
 reply is lost to a retry of the host's client expires after `claim_for` and then reaches a worker again. [DEADLINE-12] A `set` or `cancel` that the client's `Retry` runs again cannot tell a replay from a new operation: if another pod re-armed the key in between, a replayed `cancel` removes the new deadline and a replayed `set` overwrites its due time or invalidates its claim.
+[DEADLINE-16] An `arm` that the client's `Retry` runs again cannot tell a replay from a new operation either, and its bool means "this call's script armed". When its first attempt armed the key, the replay returns False and the key waits at the first attempt's due time. When the key was claimed and done in between, the replay arms it again and the due time runs again under the host's fence (duty 2); when it was cancelled in between, the replay brings back a key the host cancelled, which the host's fence refuses the same way.
+[DEADLINE-20] A `recur` that the client's `Retry` runs again after its first attempt succeeded finds its token gone, returns False and leaves the key waiting at the first attempt's due time. False from `recur` means this call changed nothing: the key then waits (a replay, a `set`), is held by another claim (a takeover) or is absent (a `cancel`, a `done`, a Redis restart, which duty 3's reconcile `arm` repairs). A `recur` that raises `StoreError` leaves the claim's end uncertain, so the due time may run again after `claim_for` under the host's fence, as a raised `done` does.
 
 ## What tandem logs
 
@@ -172,14 +177,16 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    writes its effect against a version or generation of its own, in one atomic step of its own store, so the
    older handler's effect is refused.
 3. **Reconcile the deadlines after a Redis restart, because what they guard is the host's durable state and only
-   the host knows which to `set` again.** On the platform's Redis (no persistence, `noeviction`, one replica) a
+   the host knows which to `arm` again.** On the platform's Redis (no persistence, `noeviction`, one replica) a
    data loss is a restart, which drops every connection, so `following` calls `on_resync` before any wake it
    covers ([WAKE-26]): tandem notices the loss, the host acts on it. A restart takes every pending deadline and
-   every claim with it. The host derives the deadlines its durable state needs and `set`s them again at start,
-   at `on_resync` and at its periodic idempotent reconcile, which stays. A `set` voids a live claim
-   ([DEADLINE-4]), so a re-set at every `on_resync` runs an in-flight handler again, under the host's fence
-   (duty 2). The limits: a `FLUSHALL` on an open subscription drops no connection, so no `on_resync` follows,
-   and a host without a wake channel has no `on_resync` at all; the reconcile period alone repairs both.
+   every claim with it. The host derives the deadlines its durable state needs and `arm`s them at start, at
+   `on_resync` and at its periodic idempotent reconcile, which stays. An `arm` leaves a key that waits or is
+   claimed untouched ([DEADLINE-14]), so a reconcile neither moves a due time another pod has yet to claim nor
+   voids a claim in flight; the host `set`s a key only when its own state moved that key's due time, and a
+   `set` voids a live claim ([DEADLINE-4]). A recurring key ends each run with `recur`, so it waits again before
+   its claim ends. The limits: a `FLUSHALL` on an open subscription drops no connection, so no `on_resync`
+   follows, and a host without a wake channel has no `on_resync` at all; the reconcile period alone repairs both.
 4. **One `kept` per holder, because what "alive" means for a holder is the host's own meaning.** Several pods
    may renew one holder when "any of them is alive" is the intended meaning: `renew` is atomic, and the lease
    then cannot tell them apart. A `kept` ends the shared generation at its exit, so only one pod runs it.

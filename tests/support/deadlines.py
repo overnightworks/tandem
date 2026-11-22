@@ -1,11 +1,14 @@
 """Tools of the deadline tests: Redis's clock, a wait for a due key and a read of a key's state."""
 
+from datetime import timedelta
 from typing import cast
 
 from redis.asyncio import Redis
 
 from tandem import Deadlines, Due, Script
 from tests.support.waiting import until
+
+TwoPods = tuple[Redis, Deadlines, Deadlines]
 
 KEYS_OF_THE_SCRIPT = "local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}\n"
 _STATE_SCRIPT = KEYS_OF_THE_SCRIPT + "return tandem.deadline_state(keys, ARGV[1])"
@@ -49,3 +52,29 @@ async def state_of(client: Redis, deadlines: Deadlines, key: str) -> tuple[str, 
         return None
     name, milliseconds = cast(list[object], reply)
     return (client.get_encoder().decode(name, force=True), int(cast(int, milliseconds)))
+
+
+async def claimed_key(deadlines: Deadlines, key: str = "room-1") -> Due:
+    """Make `key` due now and claim it."""
+    await deadlines.set(key, timedelta(0))
+    (due,) = await claim_when_due(deadlines)
+    return due
+
+
+async def expired_claim(client: Redis, deadlines: Deadlines) -> tuple[Due, tuple[str, int]]:
+    """Claim `room-1` and wait until the claim has run out; the claim and its `state_of`."""
+    due = await claimed_key(deadlines)
+    claimed = await state_of(client, deadlines, due.key)
+    assert claimed is not None
+    await until_redis_ms(client, claimed[1])
+    return due, claimed
+
+
+def assert_waits_for(
+    state: tuple[str, int] | None, span: timedelta, *, before_ms: int, after_ms: int
+) -> None:
+    """`state` waits for a due time `span` after some moment between `before_ms` and `after_ms`."""
+    assert state is not None
+    assert state[0] == "waiting"
+    span_ms = int(span.total_seconds() * 1000)
+    assert before_ms + span_ms <= state[1] <= after_ms + span_ms

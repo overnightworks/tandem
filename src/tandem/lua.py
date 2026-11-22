@@ -20,7 +20,7 @@ function tandem.epoch_settled(epoch_key, now_ms, lasts_ms)
   return now_ms - tonumber(redis.call('GET', epoch_key)) >= tonumber(lasts_ms)
 end
 
--- Arms `key` to come due `due_in_ms` from now; a claim on it is invalidated. Returns the due ms.
+-- Sets `key` to come due `due_in_ms` from now; a claim on it is invalidated. Returns the due ms.
 function tandem.deadline_set(keys, key, due_in_ms)
   local due_ms = tandem.now_ms() + tonumber(due_in_ms)
   redis.call('ZREM', keys.claimed, key)
@@ -52,6 +52,16 @@ function tandem.deadline_state(keys, key)
     return {'claimed', tonumber(claim_until_ms)}
   end
   return nil
+end
+
+-- Sets `key` like `deadline_set` only while it neither waits nor is claimed, so a waiting key, a
+-- due one nobody claimed and a claimed one stay as they are. Returns 1 when it set `key`, else 0.
+function tandem.deadline_arm(keys, key, due_in_ms)
+  if tandem.deadline_state(keys, key) then
+    return 0
+  end
+  tandem.deadline_set(keys, key, due_in_ms)
+  return 1
 end
 
 -- {'held', generation, expires_ms} while a live lock holds `name`; {'unknown'} while it is absent
