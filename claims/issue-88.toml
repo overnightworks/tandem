@@ -1,8 +1,0 @@
-claim_id = "e12e67afc65c4f41af8def3b2e1f5f16"
-agent = "Claude 3ac587c2-6e7b-482a-8e65-3753b7805733"
-role = "builder"
-base = "752ea99474c24acaf89050ca40da697f338af436"
-branch = "claude/issue-88-hold-tandem-s-debt-under-quality-s-basel"
-scope = ["quality/baseline.toml", "tests/support/locks.py", "tests/test_leases_epoch.py", "tests/test_leases_renew.py", "tests/test_locks_crash.py", "tests/test_locks_restart.py", "tests/test_wake_basic.py"]
-opened_commit = "5630432e1e8248430a98d79e4aaf9bd1ee441aba"
-whole_reason = "One subject, quality's debt area for tandem going from measured only to held and clean; each part is a few lines, so a split would spend two lanes on one subject."
