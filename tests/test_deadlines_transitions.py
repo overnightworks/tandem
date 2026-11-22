@@ -120,9 +120,7 @@ async def test_deadline_state_reads_waiting_with_the_due_and_claimed_with_the_ex
     after_set = await redis_ms(client)
 
     waiting = await state_of(client, deadlines, "room-1")
-    assert waiting is not None
-    assert waiting[0] == "waiting"
-    assert before_set + 60_000 <= waiting[1] <= after_set + 60_000
+    assert_waits_for(waiting, LATER, before_ms=before_set, after_ms=after_set)
 
     await deadlines.set("room-1", timedelta(0))
     before_claim = await redis_ms(client)
