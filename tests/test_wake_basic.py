@@ -231,7 +231,7 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
         async def second_read_started() -> bool:
             return channel.reads_started == 2
 
-        # The second read sends its PING once it starts, so the reply precedes "b" on the connection.
+        # The second read sends its PING when it starts: its reply precedes "b" on the connection.
         await until(second_read_started)
         await publisher.publish("b")
         await until(handled_count(2))
