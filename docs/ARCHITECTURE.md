@@ -30,7 +30,7 @@ Module owners in `tandem`:
   `following`, the back-off loop around it and what a host would otherwise write around that loop:
   readiness, the bounded start, the serialised handling, the sender's trace and the split of a failure before
   and after the entry.
-- `deadlines` owns `Deadlines` and `Due`: the claim, extend and done scripts and the claim tokens.
+- `deadlines` owns `Deadlines` and `Due`: the deadline scripts and the claim tokens.
 - `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts and the loops of
   `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of
   `Deadlines` over any three keys), so a lapse is claimed, extended and finished like a deadline.
@@ -78,11 +78,13 @@ A deadline is in one of three places; every arrow is one Lua script on Redis `TI
 ```mermaid
 stateDiagram-v2
     [*] --> Waiting: set (due ZSET)
+    [*] --> Waiting: arm, key absent
     Waiting --> Waiting: set again
     Waiting --> Claimed: claim_due, due reached (new token)
     Claimed --> Claimed: extend, token current and unexpired
     Claimed --> Claimed: claim_due, claim expired (new token)
     Claimed --> Waiting: set (token void)
+    Claimed --> Waiting: recur, token holds
     Claimed --> [*]: done, token current
     Waiting --> [*]: cancel
     Claimed --> [*]: cancel (token void)
@@ -90,7 +92,8 @@ stateDiagram-v2
 
 Per kind there are a due ZSET scored by the due time in ms, a claimed ZSET scored by the claim's expiry and
 a HASH from key to the current token. A claim is valid exactly while its token is the current one, so `set`,
-`cancel` and a takeover void the old claim in the script that moves the key.
+`cancel` and a takeover void the old claim in the script that moves the key. `arm` moves only an absent key
+and never voids a claim; `recur` ends a claim and arms the key in one script, so the key is never absent.
 
 A lease is in the expiry ZSET while it lives and its generation is in a HASH. Every lease script reads
 `TIME`, sets the epoch when absent and reads the lease state, so these are one snapshot:
