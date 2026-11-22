@@ -6,7 +6,7 @@ from redis.asyncio import Redis
 from tandem import Leases, LeaseState, Liveness, Roster
 from tandem.keys import lease_keys
 from tests.support.deadlines import redis_ms
-from tests.support.leases import Handled, liveness_of, serving, wipe
+from tests.support.leases import Handled, serving, until_gone, wipe
 from tests.support.restart import restart
 from tests.support.waiting import until
 
@@ -41,11 +41,8 @@ async def test_after_a_redis_restart_an_absent_lease_reads_unknown_for_lasts_the
     read_at = await redis_ms(client)
     first_read = await leases.state(["pod-a"])
 
-    async def settled() -> bool:
-        return await liveness_of(leases, "pod-a") is Liveness.GONE
-
     assert first_read == {"pod-a": LeaseState(Liveness.UNKNOWN, None, None)}
-    await until(settled)
+    await until_gone(leases, "pod-a")
     assert await redis_ms(client) >= read_at + LASTS_MS
 
 
@@ -64,14 +61,11 @@ async def test_only_state_reads_after_a_wipe_read_unknown_until_lasts_passed_sin
     read_at = await redis_ms(client)
     first_read = await leases.state(["pod-a", "pod-b"])
 
-    async def settled() -> bool:
-        return await liveness_of(leases, "pod-a") is Liveness.GONE
-
     assert first_read == {
         "pod-a": LeaseState(Liveness.UNKNOWN, None, None),
         "pod-b": LeaseState(Liveness.UNKNOWN, None, None),
     }
-    await until(settled)
+    await until_gone(leases, "pod-a")
     assert await redis_ms(client) >= read_at + LASTS_MS
 
 

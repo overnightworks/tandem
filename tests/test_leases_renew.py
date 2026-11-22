@@ -107,10 +107,7 @@ async def test_an_expired_lease_reaches_a_handler_once_and_a_renewal_after_it_st
     old = await leases.renew("pod-a")
     await until_redis_ms(client, await redis_ms(client) + 300)
 
-    async def lapsed() -> bool:
-        return await liveness_of(leases, "pod-a") is Liveness.GONE
-
-    await until(lapsed)
+    await until_gone(leases, "pod-a")
     renewal = await leases.renew("pod-a")
     handled = Handled()
     async with serving(leases, handled):

@@ -5,6 +5,7 @@ from redis.asyncio import Redis
 
 from tandem import Liveness, Locks, LockState
 from tests.support.deadlines import redis_ms
+from tests.support.locks import until_acquirable
 from tests.support.restart import restart
 from tests.support.waiting import until
 
@@ -34,9 +35,6 @@ async def test_after_a_redis_restart_acquire_waits_for_lasts_and_the_old_generat
     assert await locks.extend("gpu-0", generation) is False
     assert await locks.state("gpu-0") == LockState(Liveness.UNKNOWN, None, None)
 
-    async def given() -> bool:
-        return await locks.acquire("gpu-0") is not None
-
-    await until(given)
+    await until_acquirable(locks, "gpu-0")
     assert await redis_ms(client) >= read_at + LASTS_MS
     assert (await locks.state("gpu-0")).generation != generation

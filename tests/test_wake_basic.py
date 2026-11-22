@@ -186,10 +186,10 @@ class _IdleBeforeEveryReadAfterTheFirst(WakeChannel):
     def __init__(self, redis: Redis, *, key_prefix: str, idle: float) -> None:
         super().__init__(redis, key_prefix=key_prefix)
         self._idle = idle
-        self._reads = 0
+        self.reads_started = 0
 
     async def _next_event(self, pubsub: PubSub) -> Wake | _Resubscribed:
-        if self._reads:
+        if self.reads_started:
             clock = asyncio.get_running_loop()
             idle_until = clock.time() + self._idle
 
@@ -197,7 +197,7 @@ class _IdleBeforeEveryReadAfterTheFirst(WakeChannel):
                 return clock.time() > idle_until
 
             await until(idle_has_passed)
-        self._reads += 1
+        self.reads_started += 1
         return await super()._next_event(pubsub)
 
 
@@ -227,7 +227,12 @@ async def test_a_client_that_checks_its_connection_health_still_yields_only_wake
     ):
         await publisher.publish("a")
         await until(handled_count(1))
-        # The reply to the PING sent for the first read now precedes "b" on the connection.
+
+        async def third_read_started() -> bool:
+            return channel.reads_started >= 3
+
+        # The read after "a" sends its PING when it starts: its reply precedes "b".
+        await until(third_read_started)
         await publisher.publish("b")
         await until(handled_count(2))
 

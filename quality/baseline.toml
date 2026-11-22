@@ -1,0 +1,19 @@
+# Measured by `quality check --fix`. Entries only ever go down.
+
+[function_lines."tests/test_leases_state.py"]
+"test_a_state_racing_renewals_and_ends_of_its_holder_reads_the_generation_live_then" = 61
+
+[clones."src/tandem/deadlines.py"]
+"DeadlineQueue.__init__" = [["src/tandem/locks.py", "Locks.__init__"], ["src/tandem/slots.py", "Slots.__init__"]]
+
+[clones."src/tandem/locks.py"]
+"Locks.__init__" = [["src/tandem/slots.py", "Slots.__init__"]]
+
+[clones."tests/test_locks_keys.py"]
+test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming_the_argument = [["tests/test_slots_keys.py", "test_a_prefix_a_family_or_lasts_that_is_invalid_fails_at_construction_naming_the_argument"]]
+
+[clones."tests/test_locks_logging.py"]
+test_every_lock_call_writes_one_line_with_its_outcome = [["tests/test_slots_logging.py", "test_every_slot_call_writes_one_line_with_its_outcome"]]
+
+[clones."tests/test_locks_outage.py"]
+test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as_no_outage = [["tests/test_slots_outage.py", "test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as_no_outage"]]

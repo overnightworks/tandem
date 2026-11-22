@@ -1,8 +1,10 @@
-"""Tools of the lock tests: the family the helpers share, a wiped app and a lock's expiry."""
+"""Tools of the lock tests: a wiped app, a lock's expiry and the wait until a lock is acquirable."""
 
 from redis.asyncio import Redis
 
+from tandem import Locks
 from tandem.keys import lock_keys
+from tests.support.waiting import until
 
 FAMILY = "gpu"
 
@@ -18,3 +20,12 @@ async def expiry_of(observer: Redis, key_prefix: str, name: str, family: str = F
     score = await observer.zscore(lock_keys(key_prefix, family).expiry, name)
     assert score is not None
     return score
+
+
+async def until_acquirable(locks: Locks, name: str) -> None:
+    """Wait until `locks` acquires the lock on `name`, which it then holds."""
+
+    async def acquired() -> bool:
+        return await locks.acquire(name) is not None
+
+    await until(acquired)

@@ -8,8 +8,8 @@ from redis.asyncio import Redis
 
 from tandem import Locks
 from tests.support.deadlines import redis_ms
-from tests.support.locks import expiry_of
-from tests.support.waiting import until, within
+from tests.support.locks import expiry_of, until_acquirable
+from tests.support.waiting import within
 
 LASTS_MS = 1500
 
@@ -42,10 +42,7 @@ async def test_the_lock_of_a_killed_holder_is_refused_before_lasts_and_given_aft
 
         assert await locks.acquire("gpu-0") is None
 
-        async def given() -> bool:
-            return await locks.acquire("gpu-0") is not None
-
-        await until(given)
+        await until_acquirable(locks, "gpu-0")
         assert await redis_ms(client) >= expiry
     finally:
         if holder.returncode is None:
