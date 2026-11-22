@@ -129,7 +129,8 @@ class DeadlineQueue:
 
     async def arm(self, key: str, due_in: timedelta) -> bool:
         """Make `key` come due `due_in` from now on Redis TIME only when it neither waits nor is
-        claimed; True when this call armed it. A replay by the client's retry returns False."""
+        claimed; True when this call's script armed it. A retry cannot tell a replay from a new
+        call."""
         return await self._arm.run(self._key_names(), [key, milliseconds(due_in)]) == 1
 
     async def recur(self, due: Due, due_in: timedelta) -> bool:

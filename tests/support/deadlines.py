@@ -61,6 +61,15 @@ async def claimed_key(deadlines: Deadlines, key: str = "room-1") -> Due:
     return due
 
 
+async def expired_claim(client: Redis, deadlines: Deadlines) -> tuple[Due, tuple[str, int]]:
+    """Claim `room-1` and wait until the claim has run out; the claim and its `state_of`."""
+    due = await claimed_key(deadlines)
+    claimed = await state_of(client, deadlines, due.key)
+    assert claimed is not None
+    await until_redis_ms(client, claimed[1])
+    return due, claimed
+
+
 def assert_waits_for(
     state: tuple[str, int] | None, span: timedelta, *, before_ms: int, after_ms: int
 ) -> None:

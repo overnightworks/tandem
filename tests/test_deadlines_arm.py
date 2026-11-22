@@ -15,10 +15,10 @@ from tests.support.deadlines import (
     assert_waits_for,
     claim_when_due,
     claimed_key,
+    expired_claim,
     key_names,
     redis_ms,
     state_of,
-    until_redis_ms,
 )
 from tests.support.proxy import TcpProxy
 
@@ -116,10 +116,7 @@ async def test_arm_of_a_key_whose_claim_expired_leaves_it_for_the_takeover_and_v
     client = make_client(redis_url)
     pod_a = new_deadlines(client, claim_for=timedelta(milliseconds=300))
     pod_b = new_deadlines(make_client(redis_url))
-    old = await claimed_key(pod_a)
-    claimed = await state_of(client, pod_a, "room-1")
-    assert claimed is not None
-    await until_redis_ms(client, claimed[1])
+    old, claimed = await expired_claim(client, pod_a)
 
     assert await pod_b.arm("room-1", LATER) is False
 

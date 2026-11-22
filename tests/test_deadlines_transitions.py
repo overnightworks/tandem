@@ -4,16 +4,18 @@ from datetime import timedelta
 import pytest
 from redis.asyncio import Redis
 
-from tandem import Deadlines, Due, Script
+from tandem import Deadlines, Script
 from tests.support.backends import Backend
 from tests.support.deadlines import (
     KEYS_OF_THE_SCRIPT,
     TwoPods,
+    assert_waits_for,
     claim_when_due,
+    claimed_key,
+    expired_claim,
     key_names,
     redis_ms,
     state_of,
-    until_redis_ms,
 )
 
 LATER = timedelta(seconds=60)
@@ -28,12 +30,6 @@ async def _rearm_through_deadlines(client: Redis, deadlines: Deadlines, key: str
 
 async def _rearm_through_a_script(client: Redis, deadlines: Deadlines, key: str) -> None:
     await Script(client, _SET_IN_A_SCRIPT).run(key_names(deadlines), [key, 60_000])
-
-
-async def _claimed_key(client: Redis, deadlines: Deadlines) -> Due:
-    await deadlines.set("room-1", timedelta(0))
-    (due,) = await claim_when_due(deadlines)
-    return due
 
 
 @pytest.mark.parametrize(
@@ -55,11 +51,10 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
     """Spec: DEADLINE-4, DEADLINE-9, DEADLINE-12, LUA-3."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client, claim_for=claim_for)
-    old = await _claimed_key(client, deadlines)
     if claim_runs_out:
-        claimed = await state_of(client, deadlines, "room-1")
-        assert claimed is not None
-        await until_redis_ms(client, claimed[1])
+        old, _ = await expired_claim(client, deadlines)
+    else:
+        old = await claimed_key(deadlines)
     before = await redis_ms(client)
     await rearm(client, deadlines, "room-1")
     after = await redis_ms(client)
@@ -68,9 +63,7 @@ async def test_a_set_on_a_claimed_key_rearms_it_and_the_old_claimers_done_leaves
     assert await deadlines.done(old) is False
     assert await state_of(client, deadlines, "room-1") == waiting
 
-    assert waiting is not None
-    assert waiting[0] == "waiting"
-    assert before + 60_000 <= waiting[1] <= after + 60_000
+    assert_waits_for(waiting, LATER, before_ms=before, after_ms=after)
 
 
 async def test_a_stale_extend_after_a_superseding_set_leaves_the_new_due_untouched(
@@ -79,7 +72,7 @@ async def test_a_stale_extend_after_a_superseding_set_leaves_the_new_due_untouch
     """Spec: DEADLINE-8, LUA-3."""
     client = make_client(redis_url)
     deadlines = new_deadlines(client)
-    old = await _claimed_key(client, deadlines)
+    old = await claimed_key(deadlines)
     await deadlines.set("room-1", LATER)
     waiting = await state_of(client, deadlines, "room-1")
 
@@ -150,7 +143,7 @@ async def test_deadline_state_is_nil_once_a_key_is_done_cancelled_or_never_set(
     client = backend.new_client()
     deadlines = new_deadlines(client)
     if ending != "never set":
-        due = await _claimed_key(client, deadlines)
+        due = await claimed_key(deadlines)
         if ending == "done":
             assert await deadlines.done(due) is True
         else:

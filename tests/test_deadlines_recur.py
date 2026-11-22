@@ -14,9 +14,9 @@ from tests.support.deadlines import (
     assert_waits_for,
     claim_when_due,
     claimed_key,
+    expired_claim,
     redis_ms,
     state_of,
-    until_redis_ms,
 )
 from tests.support.proxy import TcpProxy
 
@@ -39,11 +39,10 @@ async def test_recur_ends_the_claim_and_arms_the_key_for_the_next_due_time_in_on
     """Spec: DEADLINE-17."""
     client = backend.new_client()
     deadlines = new_deadlines(client, claim_for=claim_for)
-    due = await claimed_key(deadlines)
     if claim_runs_out:
-        claimed = await state_of(client, deadlines, "room-1")
-        assert claimed is not None
-        await until_redis_ms(client, claimed[1])
+        due, _ = await expired_claim(client, deadlines)
+    else:
+        due = await claimed_key(deadlines)
     before = await redis_ms(client)
 
     assert await deadlines.recur(due, LATER) is True
@@ -62,10 +61,7 @@ async def test_recur_after_a_takeover_returns_false_and_the_new_holders_claim_st
     client = make_client(redis_url)
     pod_a = new_deadlines(client, claim_for=timedelta(milliseconds=300))
     pod_b = new_deadlines(make_client(redis_url))
-    old = await claimed_key(pod_a)
-    expired = await state_of(client, pod_a, "room-1")
-    assert expired is not None
-    await until_redis_ms(client, expired[1])
+    old, _ = await expired_claim(client, pod_a)
     (taken,) = await claim_when_due(pod_b)
     claimed = await state_of(client, pod_b, "room-1")
 
