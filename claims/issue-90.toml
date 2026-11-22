@@ -1,0 +1,8 @@
+claim_id = "4aa94415bfd344ba91637a757b7c5071"
+agent = "Claude 3ac587c2-6e7b-482a-8e65-3753b7805733"
+role = "builder"
+base = "2f014372936ebb66aa6b73058851ab30b51b2ea4"
+branch = "claude/issue-90-deadlines-arm-only-an-absent-key-and-rec"
+scope = ["docs/ARCHITECTURE.md", "docs/reference.md", "quality/baseline.toml", "src/tandem/deadlines.py", "src/tandem/lua.py", "tests/conftest.py", "tests/support/deadlines.py", "tests/test_deadlines_arm.py", "tests/test_deadlines_recur.py", "tests/test_deadlines_restart.py", "tests/test_deadlines_transitions.py"]
+opened_commit = "740c360d3f58267ae500f3225662fc49c571b008"
+whole_reason = "Two additive transitions for recurring deadlines, the Lua kit function, their rule IDs and duty 3's switch to them land together, so the reference never recommends a transition tandem does not ship, or ships one no rule promises."
