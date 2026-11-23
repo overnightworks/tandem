@@ -25,7 +25,6 @@ async def test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as
     proxy: TcpProxy,
     proxied_client: Redis,
     refused_store: StoreFailure,
-    make_client: Callable[..., Redis],
     new_locks: Callable[..., Locks],
 ):
     """Spec: STORE-1."""
