@@ -1,7 +1,0 @@
-claim_id = "f94545a8173d49489a1bb0aa88b23bda"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "acfc311b7f7d87965fda2f8f85aa9906edba9026"
-branch = "claude/issue-120-architecture-names-testing-s-epoch-helpe"
-scope = ["docs/ARCHITECTURE.md"]
-opened_commit = "b438801cdd837520da284bc8a4c60c1f0750b054"
