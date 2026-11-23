@@ -1,0 +1,8 @@
+claim_id = "4f97e81701724d7fba0286f01921b6bf"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
+role = "builder"
+base = "a0721f9e114d12dba3589d39ddd4b9cb53bc2172"
+branch = "claude/issue-104-deadlines-serve-what-comes-due-through-t"
+scope = ["README.md", "docs/ARCHITECTURE.md", "docs/reference.md", "src/tandem/deadlines.py", "src/tandem/leases.py", "tests/support/backoffs.py", "tests/support/deadlines.py", "tests/support/leases.py", "tests/test_deadlines_serve.py", "tests/test_leases_serve.py"]
+opened_commit = "a27d3df94cc4c9a07adcaaeb31ccb71f8e9f2d4b"
+whole_reason = "The loop moves to deadlines.py together with serve_due, the refusal rule both loops share, the lines and reference rows that state them and the tests that pin them; any part alone leaves the contract or CI false."
