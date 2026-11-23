@@ -628,6 +628,33 @@ async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_
     assert (round_line["deadline_count"], round_line["failed_count"]) == (1, 0)
 
 
+async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it_lost(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    key_prefix: str,
+    new_deadlines: Callable[..., Deadlines],
+    observed_deadlines: Callable[..., ObservedDeadlines],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-28, LOG-22."""
+    await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
+    held = Handler[Due](hold=True)
+
+    async with serving(
+        observed_deadlines(make_client(redis_url), claim_for=LONG_CLAIM_FOR), held
+    ) as task:
+        await held.received()
+        await observer.delete(deadline_keys(key_prefix, KIND).claim)
+        await attempts.until_unsuccessful()
+        task.cancel()
+        (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
+
+    assert line["outcome"] == Outcome.CANCELLED
+    assert "claim_kept" not in line
+
+
 async def test_a_cancelled_back_off_writes_no_line_beyond_the_failed_round_before_it(
     proxy: TcpProxy,
     deadlines_through_proxy: Callable[[Backoffs], BackoffRecordingDeadlines],

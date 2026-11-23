@@ -763,6 +763,32 @@ async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_
     assert (round_line["lapse_count"], round_line["failed_count"]) == (1, 0)
 
 
+async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it_lost(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    key_prefix: str,
+    observed_leases: Callable[..., ObservedLeases],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-10, LOG-22."""
+    await observed_leases(make_client(redis_url)).renew("pod-a")
+    running = Handled(hold=True)
+
+    async with serving(
+        observed_leases(make_client(redis_url), claim_for=LONG_CLAIM_FOR), running
+    ) as task:
+        await running.received()
+        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        await attempts.until_unsuccessful()
+        task.cancel()
+        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert line["outcome"] == Outcome.CANCELLED
+    assert "claim_kept" not in line
+
+
 async def test_a_lapse_that_reaches_two_handlers_writes_a_line_for_each(
     redis_url: str,
     make_client: Callable[..., Redis],

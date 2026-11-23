@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from logline import Outcome
+from logline import Outcome, unit_trace
 from redis.asyncio import Redis
 
 from tandem import Leases, Liveness, Renewal, StoreError
@@ -21,6 +21,8 @@ from tests.support.waiting import until, within
 _LOGGER = "tandem.leases"
 LASTS = timedelta(milliseconds=600)
 EVERY = timedelta(milliseconds=100)
+_TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
+_TRACEPARENT = f"00-{_TRACE_ID}-b7ad6b7169203331-01"
 
 
 class _GatedLeases(Leases):
@@ -80,6 +82,34 @@ async def _exiting_at_its_gate(
     task.cancel()
     await within(leases.ending.wait())
     return leases, task
+
+
+def _observed_leases(client: Redis, key_prefix: str, attempts: Attempts) -> RenewalObservedLeases:
+    return RenewalObservedLeases(
+        client,
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+        attempts=attempts,
+    )
+
+
+async def _kept_through_a_run_of_failures(
+    leases: Leases,
+    store_failure: StoreFailure,
+    attempts: Attempts,
+    log_lines: LogLines,
+    *,
+    written: int,
+) -> None:
+    """One `kept` block whose renewals fail twice and then succeed, until `written` lines exist."""
+    async with leases.kept("pod-a", every=EVERY):
+        failed_before = sum(isinstance(result, StoreError) for result in attempts.results)
+        await store_failure.begin()
+        await attempts.failed(failed_before + 2)
+        await store_failure.end()
+        await log_lines.await_of("lease_keeping.ended", _LOGGER, count=written)
 
 
 async def test_kept_renews_before_its_body_runs_and_ends_the_lease_at_exit(
@@ -169,6 +199,44 @@ async def test_a_run_of_failed_renewals_writes_its_first_failure_and_its_recover
         assert line["duration_ms"] >= 0
     log_lines.assert_none_holds(entered)
     log_lines.assert_none_holds(generation)
+
+
+async def test_the_lines_of_a_run_of_failed_renewals_are_written_in_the_trace_that_entered_kept(
+    store_failure: StoreFailure,
+    key_prefix: str,
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-8."""
+    leases = _observed_leases(store_failure.client, key_prefix, attempts)
+
+    with unit_trace(_TRACEPARENT):
+        await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=2)
+
+    lines = log_lines.of("lease_keeping.ended", _LOGGER)
+    assert [line["trace_id"] for line in lines] == [_TRACE_ID, _TRACE_ID]
+
+
+async def test_a_run_of_failed_renewals_counts_per_kept_block(
+    store_failure: StoreFailure,
+    key_prefix: str,
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-8."""
+    leases = _observed_leases(store_failure.client, key_prefix, attempts)
+
+    await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=2)
+    failures_of_first_block = sum(isinstance(result, StoreError) for result in attempts.results)
+    await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=4)
+    failures = sum(isinstance(result, StoreError) for result in attempts.results)
+
+    lines = log_lines.of("lease_keeping.ended", _LOGGER)
+    assert [line["level"] for line in lines] == ["warning", "info", "warning", "info"]
+    assert [line["failed_run_count"] for line in lines if line["level"] == "info"] == [
+        failures_of_first_block,
+        failures - failures_of_first_block,
+    ]
 
 
 async def test_a_block_that_exits_during_a_run_of_failed_renewals_writes_nothing_more(
