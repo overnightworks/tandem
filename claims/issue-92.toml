@@ -1,5 +1,5 @@
 claim_id = "fc13a337b27845fb901608a57c81ecf0"
-agent = "Claude 3ac587c2-6e7b-482a-8e65-3753b7805733"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
 role = "builder"
 base = "3bafd93b2d4a2a7e344451496ba810f15892ad1c"
 branch = "claude/issue-92-restart-tests-bring-redis-back-without-a"
