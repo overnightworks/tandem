@@ -8,8 +8,6 @@ from datetime import timedelta
 import pytest
 from logline import Outcome, StepTimer
 from redis.asyncio import Redis
-from redis.asyncio.retry import Retry
-from redis.backoff import NoBackoff
 
 from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
@@ -187,24 +185,23 @@ async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handl
 
 
 async def test_a_refusal_is_ridden_out_and_the_lapse_is_handled_once_the_acl_is_restored(
-    url_denying: Callable[[str], Awaitable[str]],
+    refused_store: StoreFailure,
     redis_url: str,
-    observer: Redis,
-    key_prefix: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
     recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases],
     backoffs: Backoffs,
 ):
     """Spec: LEASE-20."""
-    leases = recording_leases(make_client(await url_denying("evalsha")), backoffs)
+    leases = recording_leases(refused_store.client, backoffs)
+    await refused_store.begin()
     await new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR).renew("pod-a")
     handled = Handled()
 
     async with serving(leases, handled) as task:
         await backoffs.reached(3)
         assert not task.done()
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
+        await refused_store.end()
         (lapse,) = await handled.received()
 
     assert lapse.holder == "pod-a"
@@ -259,14 +256,13 @@ async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handle
 
 async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_lapse_is_handled_after_it(
     proxy: TcpProxy,
+    proxied_client: Redis,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
     """Spec: LEASE-20."""
-    through_proxy = new_leases(
-        make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
-    )
+    through_proxy = new_leases(proxied_client, lasts=LASTS, claim_for=CLAIM_FOR)
     renewer = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     handled = Handled()
 
@@ -302,15 +298,14 @@ async def test_a_claim_that_runs_out_leaves_the_handler_running(
 
 async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_running(
     proxy: TcpProxy,
+    proxied_client: Redis,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
     """Spec: LEASE-17."""
     client = make_client(redis_url)
-    through_proxy = new_leases(
-        make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
-    )
+    through_proxy = new_leases(proxied_client, lasts=LASTS, claim_for=CLAIM_FOR)
     await new_leases(client, lasts=LASTS).renew("pod-a")
     running = Handled(hold=True)
 
