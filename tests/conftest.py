@@ -16,7 +16,9 @@ from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import Client, Deadlines, Leases, Locks, Slots
+from tandem.errors import FailureReason
 from tandem.testing import settle_epoch
+from tests.support.attempts import Attempts
 from tests.support.backends import Backend
 from tests.support.backoffs import Backoffs
 from tests.support.deadlines import TwoPods
@@ -24,6 +26,7 @@ from tests.support.locks import FAMILY
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.slots import FAMILY as SLOT_FAMILY
+from tests.support.store_failures import StoreFailure
 from tests.support.wake_backends import FakeBackend, RedisBackend, RedisFixtures, WakeBackend
 
 
@@ -267,6 +270,31 @@ def backoffs() -> Backoffs:
 def held_backoffs() -> Backoffs:
     """Records the back-offs of a `BackoffRecordingChannel` and keeps it in its first one."""
     return Backoffs(hold=True)
+
+
+@pytest.fixture(params=list(FailureReason))
+async def store_failure(
+    request: pytest.FixtureRequest,
+    proxy: TcpProxy,
+    proxied_client: Redis,
+    url_denying: Callable[[str], Awaitable[str]],
+    observer: Redis,
+    key_prefix: str,
+    make_client: Callable[..., Redis],
+) -> StoreFailure:
+    """The same scenario with an outage of the store and with a refusal of its commands."""
+    client = (
+        proxied_client
+        if request.param is FailureReason.OUTAGE
+        else make_client(await url_denying("flushall"))
+    )
+    return StoreFailure(request.param, client, proxy, observer, key_prefix)
+
+
+@pytest.fixture
+def attempts() -> Attempts:
+    """Records the results of the attempts of a gated call."""
+    return Attempts()
 
 
 @pytest.fixture

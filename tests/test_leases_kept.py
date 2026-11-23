@@ -4,18 +4,20 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
+from logline import Outcome
 from redis.asyncio import Redis
-from redis.asyncio.retry import Retry
-from redis.backoff import NoBackoff
 
 from tandem import Leases, Liveness, Renewal, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
+from tests.support.attempts import Attempts, RenewalObservedLeases
 from tests.support.deadlines import redis_ms, until_redis_ms
 from tests.support.leases import liveness_of, until_gone
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
+from tests.support.store_failures import StoreFailure
 from tests.support.waiting import until, within
 
+_LOGGER = "tandem.leases"
 LASTS = timedelta(milliseconds=600)
 EVERY = timedelta(milliseconds=100)
 
@@ -125,72 +127,80 @@ async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
             pytest.fail("the body must not run")
 
 
-async def test_a_refusal_at_a_later_renewal_is_logged_and_retried_and_the_body_runs_on(
-    url_denying: Callable[[str], Awaitable[str]],
-    redis_url: str,
-    observer: Redis,
+async def test_a_run_of_failed_renewals_writes_its_first_failure_and_its_recovery_only(
+    store_failure: StoreFailure,
     key_prefix: str,
-    make_client: Callable[..., Redis],
-    new_leases: Callable[..., Leases],
+    attempts: Attempts,
     log_lines: LogLines,
 ):
-    """Spec: LEASE-14, LOG-8."""
-    holder_pod = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
-    observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
-
-    async def alive() -> bool:
-        return await liveness_of(observer_pod, "pod-a") is Liveness.ALIVE
-
-    async with holder_pod.kept("pod-a", every=EVERY):
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
-        await until_gone(observer_pod, "pod-a")
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
-        await until(alive)
-
-    failures = log_lines.of("lease_renewal.failed", "tandem.leases")
-    assert failures
-    assert {(line["level"], line["reason"]) for line in failures} == {("warning", "refused")}
-    assert {line["error_type"] for line in failures} == {StoreError.__name__}
-    assert {(line["lease_family"], line["holder_id"]) for line in failures} == {("owner", "pod-a")}
-
-
-async def test_an_outage_at_a_later_renewal_is_logged_as_a_warning_without_a_traceback(
-    proxy: TcpProxy,
-    make_client: Callable[..., Redis],
-    new_leases: Callable[..., Leases],
-    log_lines: LogLines,
-):
-    """Spec: LEASE-14, LOG-8."""
-    leases = new_leases(
-        make_client(proxy.url, retry=Retry(NoBackoff(), 0)),
+    """Spec: LEASE-14, LOG-8, LOG-19."""
+    leases = RenewalObservedLeases(
+        store_failure.client,
+        key_prefix=key_prefix,
+        family="owner",
         lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+        attempts=attempts,
     )
 
     async with leases.kept("pod-a", every=EVERY) as hold:
         entered = hold.generation
-        proxy.cut()
-
-        async def failure_logged() -> bool:
-            return bool(log_lines.of("lease_renewal.failed", "tandem.leases"))
-
-        await until(failure_logged)
-        proxy.restore()
+        await store_failure.begin()
+        await attempts.failed(2)
+        await store_failure.end()
+        (failure, recovery) = await log_lines.await_of("lease_keeping.ended", _LOGGER, count=2)
         generation = hold.generation
 
-    (first, *_) = log_lines.of("lease_renewal.failed", "tandem.leases")
-    assert (first["level"], first["reason"]) == ("warning", "outage")
-    assert first["error_type"] == StoreError.__name__
-    assert "exception" not in first
+    failures = sum(isinstance(result, StoreError) for result in attempts.results)
+    assert log_lines.of("lease_keeping.ended", _LOGGER) == [failure, recovery]
+    assert (failure["level"], failure["outcome"], failure["reason"]) == (
+        "warning",
+        Outcome.FAILED,
+        store_failure.reason,
+    )
+    assert "exception" not in failure
+    assert (recovery["level"], recovery["outcome"]) == ("info", Outcome.OK)
+    assert 2 <= recovery["failed_run_count"] == failures
+    for line in (failure, recovery):
+        assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+        assert line["duration_ms"] >= 0
     log_lines.assert_none_holds(entered)
     log_lines.assert_none_holds(generation)
 
 
+async def test_a_block_that_exits_during_a_run_of_failed_renewals_writes_nothing_more(
+    proxied_client: Redis,
+    proxy: TcpProxy,
+    key_prefix: str,
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-8."""
+    leases = RenewalObservedLeases(
+        proxied_client,
+        key_prefix=key_prefix,
+        family="owner",
+        lasts=LASTS,
+        claim_for=timedelta(seconds=30),
+        attempts=attempts,
+    )
+
+    with pytest.raises(StoreError):  # the end at the exit cannot reach the cut store
+        async with leases.kept("pod-a", every=EVERY):
+            proxy.cut()
+            await attempts.failed(2)
+
+    assert [line["outcome"] for line in log_lines.of("lease_keeping.ended", _LOGGER)] == [
+        Outcome.FAILED
+    ]
+
+
 async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_the_first_back_off(
-    proxy: TcpProxy, make_client: Callable[..., Redis], new_leases: Callable[..., Leases]
+    proxy: TcpProxy, proxied_client: Redis, new_leases: Callable[..., Leases]
 ):
     """Spec: LEASE-14."""
     every = timedelta(seconds=BACKOFF_FIRST_SECONDS * 1.6)
-    leases = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=2 * every)
+    leases = new_leases(proxied_client, lasts=2 * every)
     clock = asyncio.get_running_loop()
 
     async with leases.kept("pod-a", every=every):
@@ -206,12 +216,13 @@ async def test_a_failed_renewal_is_retried_after_every_even_when_every_exceeds_t
 
 async def test_a_holder_paused_past_lasts_sees_the_generation_of_its_new_lease(
     proxy: TcpProxy,
+    proxied_client: Redis,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
 ):
     """Spec: LEASE-12."""
-    paused_pod = new_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS)
+    paused_pod = new_leases(proxied_client, lasts=LASTS)
     observer_pod = new_leases(make_client(redis_url), lasts=LASTS)
 
     async with paused_pod.kept("pod-a", every=EVERY) as hold:

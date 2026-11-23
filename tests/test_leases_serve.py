@@ -14,6 +14,7 @@ from redis.backoff import NoBackoff
 from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
+from tests.support.attempts import Attempts, ObservedLeases
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
 from tests.support.deadlines import (
     SERVING_EVERY,
@@ -24,10 +25,12 @@ from tests.support.deadlines import (
 from tests.support.leases import Handled, liveness_of, serving, until_gone
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
+from tests.support.store_failures import StoreFailure
 from tests.support.waiting import elapsed, until, within
 
 LASTS = timedelta(milliseconds=300)
 CLAIM_FOR = timedelta(milliseconds=300)
+LONG_CLAIM_FOR = timedelta(milliseconds=1500)  # a margin that a loaded machine cannot eat
 
 
 @pytest.fixture
@@ -44,6 +47,23 @@ def recording_leases(
             lasts=LASTS,
             claim_for=CLAIM_FOR,
             backoffs=backoffs,
+        )
+
+    return build
+
+
+@pytest.fixture
+def observed_leases(key_prefix: str, attempts: Attempts) -> Callable[..., ObservedLeases]:
+    """Leases over a client whose lapse claims' attempts go to `attempts`."""
+
+    def build(client: Redis, *, claim_for: timedelta = CLAIM_FOR) -> ObservedLeases:
+        return ObservedLeases(
+            client,
+            key_prefix=key_prefix,
+            family="owner",
+            lasts=LASTS,
+            claim_for=claim_for,
+            attempts=attempts,
         )
 
     return build
@@ -93,7 +113,7 @@ async def test_the_lapse_of_a_killed_pod_reaches_one_handler_and_another_if_that
         handled = Handled()
         async with serving(leases, handled):
             await until_redis_ms(client, await redis_ms(client) + 1000)
-            assert handled.lapses == []
+            assert handled.items == []
             claimer.send_signal(signal.SIGKILL)
             (lapse,) = await handled.received()
         assert lapse.holder == "pod-a"
@@ -119,12 +139,12 @@ async def test_a_handler_that_runs_past_claim_for_keeps_its_lapse_from_others_an
         await running.received()
         async with serving(second, other):
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
-            assert other.lapses == []
+            assert other.items == []
             running.release()
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
 
-    assert len(running.lapses) == 1
-    assert other.lapses == []
+    assert len(running.items) == 1
+    assert other.items == []
 
 
 async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handler_leaves_the_loop(
@@ -207,7 +227,7 @@ async def test_every_lapse_of_a_mass_lapse_reaches_a_handler(
     async with serving(leases, handled):
         await handled.received(lapses)
 
-    assert sorted(lapse.holder for lapse in handled.lapses) == sorted(holders)
+    assert sorted(lapse.holder for lapse in handled.items) == sorted(holders)
 
 
 async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handled_once(
@@ -228,13 +248,13 @@ async def test_the_claims_of_a_held_batch_do_not_expire_and_each_lapse_is_handle
         await running.received()
         async with serving(second, other):
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
-            assert other.lapses == []
+            assert other.items == []
             running.release()
             await running.received(3)
             await until_redis_ms(client, await redis_ms(client) + 3 * 300)
 
-    assert sorted(lapse.holder for lapse in running.lapses) == holders
-    assert other.lapses == []
+    assert sorted(lapse.holder for lapse in running.items) == holders
+    assert other.items == []
 
 
 async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_lapse_is_handled_after_it(
@@ -470,90 +490,97 @@ async def test_a_round_claiming_no_lapse_writes_no_line_and_one_that_did_writes_
     assert not [line for line in rounds if "failed_run_count" in line]
 
 
-async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
-    url_denying: Callable[[str], Awaitable[str]],
-    redis_url: str,
-    observer: Redis,
-    key_prefix: str,
-    make_client: Callable[..., Redis],
-    new_leases: Callable[..., Leases],
-    log_lines: LogLines,
-):
-    """Spec: LOG-12."""
-    await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
-    leases = new_leases(
-        make_client(await url_denying("flushall")), lasts=LASTS, claim_for=CLAIM_FOR
-    )
-    running = Handled(hold=True)
-
-    async with serving(leases, running):
-        await running.received()
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
-        (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
-        await log_lines.await_of("lapse_claim.expired", _LOGGER)
-        running.release()
-
-    assert line["level"] == "warning"
-    assert line["reason"] == "refused"
-    assert line["error_type"] == StoreError.__name__
-    assert line["lease_family"] == "owner"
-    assert line["holder_id"] == "pod-a"
-    claim_events = [
-        written["event"]
-        for written in log_lines.of_logger(_LOGGER)
-        if written["event"].startswith("lapse_claim")
-    ]
-    assert claim_events == ["lapse_claim_extension.failed", "lapse_claim.expired"]
-
-
-async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expired(
-    proxy: TcpProxy,
+@pytest.mark.parametrize(
+    ("handled_after_the_claim_may_have_run_out", "level"),
+    [(True, "warning"), (False, "info")],
+    ids=["handle ends after the claim may have run out", "handle ends while the claim surely runs"],
+)
+async def test_a_failed_extension_marks_the_claim_not_kept_only_once_it_may_have_run_out(
+    handled_after_the_claim_may_have_run_out: bool,
+    level: str,
+    store_failure: StoreFailure,
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
+    observed_leases: Callable[..., ObservedLeases],
+    attempts: Attempts,
     log_lines: LogLines,
 ):
-    """Spec: LOG-12, LOG-13."""
+    """Spec: LOG-10, LEASE-17."""
     await new_leases(make_client(redis_url), lasts=LASTS).renew("pod-a")
-    leases = new_leases(
-        make_client(proxy.url, retry=Retry(NoBackoff(), 0)), lasts=LASTS, claim_for=CLAIM_FOR
-    )
     running = Handled(hold=True)
 
-    async with serving(leases, running):
+    async with serving(observed_leases(store_failure.client, claim_for=LONG_CLAIM_FOR), running):
         await running.received()
-        proxy.cut()
-        (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
-        await elapsed(2 * CLAIM_FOR.total_seconds())
+        await store_failure.begin()
+        await attempts.until_unsuccessful()
+        if handled_after_the_claim_may_have_run_out:
+            await elapsed(LONG_CLAIM_FOR.total_seconds())
         running.release()
+        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
 
-    assert line["reason"] == "outage"
-    assert not log_lines.of("lapse_claim.expired", _LOGGER)
+    assert (line["level"], line["outcome"]) == (level, Outcome.OK)
+    assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+    assert line.get("claim_kept") == (False if handled_after_the_claim_may_have_run_out else None)
 
 
-async def test_a_claim_that_runs_out_is_logged_without_its_generation(
+@pytest.mark.parametrize("raised", [None, RuntimeError], ids=["returning", "raising"])
+async def test_a_handling_whose_claim_was_deleted_says_claim_not_kept_whether_it_returns_or_raises(
+    raised: type[Exception] | None,
     redis_url: str,
     make_client: Callable[..., Redis],
     observer: Redis,
-    new_leases: Callable[..., Leases],
     key_prefix: str,
+    observed_leases: Callable[..., ObservedLeases],
+    attempts: Attempts,
     log_lines: LogLines,
 ):
-    """Spec: LOG-13, LOG-22."""
-    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
-    await leases.renew("pod-a")
+    """Spec: LOG-10, LOG-22."""
+    await observed_leases(make_client(redis_url)).renew("pod-a")
     running = Handled(hold=True)
 
-    async with serving(leases, running):
+    async def handle(lapse: Lapse) -> None:
+        await running(lapse)
+        if raised is not None:
+            raise raised("the handler fails")
+
+    async with serving(observed_leases(make_client(redis_url)), handle):
         (lapse,) = await running.received()
         await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
-        (line,) = await log_lines.await_of("lapse_claim.expired", _LOGGER)
+        await attempts.until_unsuccessful()
         running.release()
+        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
 
-    assert line["level"] == "warning"
-    assert line["lease_family"] == "owner"
-    assert line["holder_id"] == "pod-a"
+    failed = raised is not None
+    assert (line["level"], line["outcome"]) == (
+        ("error", Outcome.FAILED) if failed else ("warning", Outcome.OK)
+    )
+    assert line.get("error_type") == (raised.__name__ if raised else None)
+    assert line["claim_kept"] is False
+    assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
     log_lines.assert_none_holds(lapse.generation)
+
+
+async def test_a_handling_whose_claim_was_extended_to_its_end_carries_no_claim_kept(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observed_leases: Callable[..., ObservedLeases],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-10."""
+    await observed_leases(make_client(redis_url)).renew("pod-a")
+    running = Handled(hold=True)
+
+    async with serving(observed_leases(make_client(redis_url)), running):
+        await running.received()
+        await attempts.reached(2)
+        running.release()
+        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+
+    assert attempts.results[:2] == [True, True]
+    assert (line["level"], line["outcome"]) == ("info", Outcome.OK)
+    assert "claim_kept" not in line
 
 
 async def test_a_whole_outage_writes_one_failed_line_and_one_recovery_counting_its_failed_rounds(

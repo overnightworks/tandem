@@ -197,15 +197,6 @@ class _LapseLines:
             exc_info=error,
         )
 
-    def extension_failed(self, fields: Mapping[str, str], error: StoreError) -> None:
-        logger.warning(
-            "lapse_claim_extension.failed",
-            extra={"reason": failure_reason(error), "error_type": type(error).__name__, **fields},
-        )
-
-    def claim_expired(self, fields: Mapping[str, str]) -> None:
-        logger.warning("lapse_claim.expired", extra=fields)
-
 
 def _lease_fields(family: str, holder: str) -> dict[str, str]:
     return {"lease_family": family, "holder_id": holder}
@@ -333,8 +324,9 @@ class Leases:
         """Hold `holder`'s lease for the block: renew now, then every `every`, and end it at exit.
 
         The first renewal completes before the block runs and raises `StoreError` out of the entry.
-        A later failed renewal, an outage or a refusal, is logged as a warning and retried after
-        `every`, and never ends the block. At exit an in-flight renewal completes, then the current
+        A later failed renewal, an outage or a refusal, is retried after `every` and never ends the
+        block; the first failure of a run is logged as a warning and the renewal that ends the run
+        at info, with `failed_run_count`. At exit an in-flight renewal completes, then the current
         generation ends, even when the exit is cancelled; the cancellation then propagates.
         """
         if checked_span(every, argument="every") >= self._lasts:
@@ -367,22 +359,26 @@ class Leases:
     async def _renew_until(
         self, stopping: asyncio.Event, holder: str, every_seconds: float, hold: Hold
     ) -> None:
+        failed_run_count = 0
         while True:
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(stopping.wait(), every_seconds)
             if stopping.is_set():
                 return
+            attempt = _lease_step_timer("lease_keeping.ended", self._family, holder)
             try:
                 hold.generation = (await self._renew_untimed(holder)).generation
             except StoreError as error:
-                logger.warning(
-                    "lease_renewal.failed",
-                    extra={
-                        "reason": failure_reason(error),
-                        "error_type": type(error).__name__,
-                        **_lease_fields(self._family, holder),
-                    },
-                )
+                failed_run_count += 1
+                if failed_run_count == 1:
+                    attempt.handled()
+                    attempt.fail(failure_reason(error))
+                    attempt.end()
+                continue
+            if failed_run_count:
+                attempt.add(failed_run_count=failed_run_count)
+                attempt.end()
+                failed_run_count = 0
 
     async def serve_lapses(
         self,
@@ -394,10 +390,11 @@ class Leases:
 
         Each `every` the expired leases are swept into the lapse queue and the due lapses are
         claimed in small batches until none is due. While `handle` runs its claim is extended every
-        `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
-        exception from it ends the loop. `done` follows a `handle` that returns; one that raises is
-        logged and its lapse returns when its claim runs out. An outage or a refusal of Redis is
-        ridden out with the back-off of the wake channel's following.
+        `claim_for / 3`; an extension that Redis fails or refuses stops, and `handle` keeps running,
+        its line saying `claim_kept` false when the claim was lost or may have run out. Any other
+        exception from an extension ends the loop. `done` follows a `handle` that returns; one that
+        raises is logged and its lapse returns when its claim runs out. An outage or a refusal of
+        Redis is ridden out with the back-off of the wake channel's following.
         """
 
         async def handle_due(due: Due) -> None:

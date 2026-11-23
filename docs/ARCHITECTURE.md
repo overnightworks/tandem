@@ -152,8 +152,10 @@ back-off, and end only when cancelled, while `following` rides out an outage and
 times `publish`, each lease call, each lock call and each slot call, and each round and each handling of both
 serving loops, a round only when it writes a line; Deadlines' transitions and `Script.run` write no line. A round
 that claimed nothing writes a line only as the first failure of a run of failed rounds or as the recovery after one,
-so an outage or a refusal costs two lines, not one per round per pod. A failed handler's traceback is a line of its
-own, `lapse_handler.failed` or `deadline_handler.failed`, because a step line never carries one.
+so an outage or a refusal costs two lines, not one per round per pod; the background renewals of `kept` follow the
+same rule, a first failure and a recovery. A claim extension writes no line: the handling's own line says `claim_kept`
+false when its claim was lost or may have run out. A failed handler's traceback is a line of its own,
+`lapse_handler.failed` or `deadline_handler.failed`, because a step line never carries one.
 tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
 generation, a value that can end a lease, or a slot's pool or token. Each round and each handling of a
 serving loop runs in its own trace (`unit_trace`), so the lines of a handling and the host handler's share a `trace_id`, and, from logline
