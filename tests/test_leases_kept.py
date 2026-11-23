@@ -219,17 +219,20 @@ async def test_a_run_of_failed_renewals_counts_per_kept_block(
     """Spec: LOG-8."""
     leases = _observed_leases(store_failure.client, key_prefix, attempts)
 
-    await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=2)
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(leases.kept("pod-a", every=EVERY))
+        await store_failure.begin()
+        await log_lines.await_of("lease_keeping.ended", _LOGGER)
+        with pytest.raises(StoreError):  # the end at the exit cannot reach the failing store
+            await stack.aclose()
+    await store_failure.end()
     failures_of_first_block = sum(isinstance(result, StoreError) for result in attempts.results)
-    await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=4)
+    await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=3)
     failures = sum(isinstance(result, StoreError) for result in attempts.results)
 
     lines = log_lines.of("lease_keeping.ended", _LOGGER)
-    assert [line["level"] for line in lines] == ["warning", "info", "warning", "info"]
-    assert [line["failed_run_count"] for line in lines if line["level"] == "info"] == [
-        failures_of_first_block,
-        failures - failures_of_first_block,
-    ]
+    assert [line["level"] for line in lines] == ["warning", "warning", "info"]
+    assert lines[-1]["failed_run_count"] == failures - failures_of_first_block
 
 
 async def test_a_block_that_exits_during_a_run_of_failed_renewals_writes_nothing_more(
