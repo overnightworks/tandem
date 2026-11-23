@@ -33,8 +33,8 @@ Module owners in `tandem`:
 - `deadlines` owns `Deadlines` and `Due`: the deadline scripts, the claim tokens and the serving loop over any
   deadline queue (`serve_due`): the batches, the claim extension while a handler runs, `done`, the back-off and
   the lines of a round and a handling. It also owns what every repeating background run of tandem writes (its
-  first failure and its recovery) and the loop that repeats an attempt until it is stopped, which `kept`,
-  `held` and the serving loop share.
+  first failure and its recovery, which the serving loop shares) and the loop that repeats an attempt until it
+  is stopped, which `kept` and `held` share.
 - `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts, the loop of `kept`
   and the sweep and the lapse lines of `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines`
   (the transitions of `Deadlines` over any three keys), and `serve_lapses` runs the loop of `deadlines` on it,
