@@ -32,14 +32,17 @@ Module owners in `tandem`:
   and after the entry.
 - `deadlines` owns `Deadlines` and `Due`: the deadline scripts, the claim tokens and the serving loop over any
   deadline queue (`serve_due`): the batches, the claim extension while a handler runs, `done`, the back-off and
-  the lines of a round and a handling.
+  the lines of a round and a handling. It also owns what every repeating background run of tandem writes (its
+  first failure and its recovery) and the loop that repeats an attempt until it is stopped, which `kept`,
+  `held` and the serving loop share.
 - `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts, the loop of `kept`
   and the sweep and the lapse lines of `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines`
   (the transitions of `Deadlines` over any three keys), and `serve_lapses` runs the loop of `deadlines` on it,
   so a lapse is claimed, extended and finished like a deadline; `leases` imports `deadlines`, never the
   reverse.
-- `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations.
-  It shares the app's epoch and `Liveness` with `leases` and has no lapse queue.
+- `locks` owns `Locks`, `LockState` and `LockLost`: the acquire, extend, release and state scripts, the
+  generations and the keeper of `held`. It shares the app's epoch and `Liveness`, and the shielded exit of
+  `kept` (`finished_despite_cancellation`), with `leases` and has no lapse queue.
 - `slots` owns `Slots`: the take and release scripts and the slot tokens. It is no extension of `locks`: a
   lock does exclusion with fencing and the epoch, a slot counts holders per pool and reads no epoch.
 - `lua` owns `LUA_KIT`, the one implementation of each transition that the classes and a host's script run;
@@ -144,7 +147,8 @@ pod re-read, and nothing more.
 
 **Failure.** Every failure of Redis is a `StoreError` that says whether it was an outage or a refusal;
 the serving loops (`serve_lapses`, `serve_due`) ride out an outage and a refusal alike, as failed rounds with a
-back-off, and end only when cancelled, while `following` rides out an outage and ends on a refusal, which is its
+back-off, and end only when cancelled, and `kept` and `held` ride out a failed background call the same way, retried
+after `every`, while `following` rides out an outage and ends on a refusal, which is its
 `on_failed` contract; `publish` says nothing of whether the wake arrived. The [reference](reference.md) says how a failure reaches the host.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
@@ -152,8 +156,8 @@ back-off, and end only when cancelled, while `following` rides out an outage and
 times `publish`, each lease call, each lock call and each slot call, and each round and each handling of both
 serving loops, a round only when it writes a line; Deadlines' transitions and `Script.run` write no line. A round
 that claimed nothing writes a line only as the first failure of a run of failed rounds or as the recovery after one,
-so an outage or a refusal costs two lines, not one per round per pod; the background renewals of `kept` follow the
-same rule, a first failure and a recovery. A claim extension writes no line: the handling's own line says `claim_kept`
+so an outage or a refusal costs two lines, not one per round per pod; the background renewals of `kept` and the
+background extensions of `held` follow the same rule, a first failure and a recovery. A claim extension writes no line: the handling's own line says `claim_kept`
 false when its claim was lost or may have run out. A failed handler's traceback is a line of its own,
 `lapse_handler.failed` or `deadline_handler.failed`, because a step line never carries one.
 tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
@@ -185,6 +189,13 @@ the commands and the rules for waits and outages.
   in Redis's order and a trace ends with its call. The channel's version segment is a contract between pods
   of different releases; the [reference](reference.md#redis-layout-and-retries) states the frame and what a
   change costs a host.
+- `held` cancels the task that entered its block, as `asyncio.timeout` does, so a host's own `try` and cleanup
+  run as they do for any cancellation, and it repeats the cancel every `every` until the block ends, because a
+  cancel scope inside the block, or a handler that swallows `CancelledError`, can absorb one. It
+  withdraws each cancel it delivered at the exit and raises `LockLost` only when no cancel of the host's
+  remains, so neither the host's cancellation nor an inner `asyncio.timeout` is turned into something else.
+  That needs entry and exit in one task; a block that enters through another task passes
+  `cancel_on_loss=False` and fences itself.
 - Every transition of a deadline, lease, lock or slot is one Lua script that reads `TIME`, so no pod clock is
   involved and a transition cannot interleave with another.
 - A deadline key or lock name is a ZSET member and a HASH field, never a key segment, so a free-form value
