@@ -48,8 +48,8 @@ Module owners in `tandem`:
 - `lua` owns `LUA_KIT`, the one implementation of each transition that the classes and a host's script run;
   `script` owns `Script`, which prepends it, runs by SHA and reloads on `NOSCRIPT`; `client` owns `Client`.
 - `keys` owns every name tandem gives in Redis and the check of a key prefix and a kind.
-- `testing` owns `settle_epoch` and the in-memory wake channel (`FakeWakeBus`, `FakeWakeChannel`), the helpers
-  for a host's tests; `__all__` lists the module, so they are public. The fake extends `wake`'s one base of
+- `testing` owns `aged_epoch` with `EpochSet`, which own the epoch's value, `settle_epoch`, which builds on them,
+  and the in-memory wake channel (`FakeWakeBus`, `FakeWakeChannel`), the helpers for a host's tests; `__all__` lists the module, so they are public. The fake extends `wake`'s one base of
   `following`, so a host's tests run the real handler dispatch, and the `following` cells run against it and
   against Redis alike, so a drift fails tandem's CI.
 - `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage or
