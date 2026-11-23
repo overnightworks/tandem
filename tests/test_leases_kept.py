@@ -1,5 +1,5 @@
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
@@ -337,20 +337,17 @@ async def test_cancelling_the_body_during_a_renewal_leaves_the_holder_gone_for_g
 @pytest.mark.parametrize("end_fails", [False, True])
 async def test_an_uncancelled_exit_writes_lease_end_ended_like_a_direct_end(
     end_fails: bool,
-    url_denying: Callable[[str], Awaitable[str]],
-    observer: Redis,
-    make_client: Callable[..., Redis],
+    refused_store: StoreFailure,
     new_leases: Callable[..., Leases],
-    key_prefix: str,
     log_lines: LogLines,
 ):
     """Spec: LEASE-15, LOG-19."""
-    leases = new_leases(make_client(await url_denying("flushall")), lasts=LASTS)
+    leases = new_leases(refused_store.client, lasts=LASTS)
 
     async def hold_then_exit() -> None:
         async with leases.kept("pod-a", every=EVERY):
             if end_fails:
-                await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+                await refused_store.begin()
 
     if end_fails:
         with pytest.raises(StoreError):
@@ -369,19 +366,15 @@ async def test_an_uncancelled_exit_writes_lease_end_ended_like_a_direct_end(
 @pytest.mark.parametrize("end_fails", [False, True])
 async def test_a_cancelled_exit_waits_for_its_cleanup_before_the_cancellation_propagates(
     end_fails: bool,
-    url_denying: Callable[[str], Awaitable[str]],
-    observer: Redis,
-    make_client: Callable[..., Redis],
+    refused_store: StoreFailure,
     key_prefix: str,
     log_lines: LogLines,
 ):
     """Spec: LEASE-15."""
-    leases, task = await _exiting_at_its_gate(
-        make_client(await url_denying("flushall")), key_prefix
-    )
+    leases, task = await _exiting_at_its_gate(refused_store.client, key_prefix)
     task.cancel()
     if end_fails:
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+        await refused_store.begin()
     leases.gate.set()
     await asyncio.gather(task, return_exceptions=True)
 
