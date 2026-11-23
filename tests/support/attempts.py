@@ -28,6 +28,11 @@ class Attempts:
         await self._note(result)
         return result
 
+    @property
+    def unsuccessful_count(self) -> int:
+        """How many attempts raised a `StoreError` or answered False."""
+        return sum(result is False or isinstance(result, StoreError) for result in self.results)
+
     async def reached(self, count: int) -> None:
         """Wait until `count` attempts have a result."""
         await self._until(lambda: len(self.results) >= count)
@@ -40,11 +45,7 @@ class Attempts:
 
     async def until_unsuccessful(self) -> None:
         """Wait until an attempt raised a `StoreError` or answered False."""
-        await self._until(
-            lambda: any(
-                result is False or isinstance(result, StoreError) for result in self.results
-            )
-        )
+        await self._until(lambda: self.unsuccessful_count >= 1)
 
     async def _note(self, result: object) -> None:
         async with self._changed:

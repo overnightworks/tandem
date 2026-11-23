@@ -671,6 +671,7 @@ async def test_a_failed_extension_marks_the_claim_not_kept_only_once_it_may_have
         await attempts.until_unsuccessful()
         if handled_after_the_claim_may_have_run_out:
             await elapsed(LONG_CLAIM_FOR.total_seconds())
+            assert attempts.unsuccessful_count == 1
         held.release()
         (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
 
@@ -700,10 +701,14 @@ async def test_a_handling_whose_claim_was_deleted_says_claim_not_kept_whether_it
         if raised is not None:
             raise raised("the handler fails")
 
-    async with serving(observed_deadlines(make_client(redis_url)), handle):
+    async with serving(
+        observed_deadlines(make_client(redis_url), claim_for=LONG_CLAIM_FOR), handle
+    ):
         (due,) = await held.received()
         await observer.delete(deadline_keys(key_prefix, KIND).claim)
         await attempts.until_unsuccessful()
+        await elapsed(LONG_CLAIM_FOR.total_seconds() / 2)  # 1.5 extension intervals
+        assert attempts.unsuccessful_count == 1
         held.release()
         (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
 
