@@ -3,8 +3,6 @@ from collections.abc import Callable
 
 import pytest
 from redis.asyncio import Redis
-from redis.asyncio.retry import Retry
-from redis.backoff import NoBackoff
 
 from tandem import WakeChannel
 from tandem.keys import wake_channel
@@ -58,15 +56,14 @@ async def test_cancelling_while_reading_unsubscribes_and_closes_the_connection(
 
 async def test_cancelling_during_a_back_off_leaves_no_connection_and_no_task(
     proxy: TcpProxy,
-    make_client: Callable[..., Redis],
+    proxied_client: Redis,
     observer: Redis,
     key_prefix: str,
     held_backoffs: Backoffs,
 ):
     """Spec: WAKE-17."""
     tasks_before = asyncio.all_tasks()
-    client = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
-    channel = BackoffRecordingChannel(client, key_prefix=key_prefix, backoffs=held_backoffs)
+    channel = BackoffRecordingChannel(proxied_client, key_prefix=key_prefix, backoffs=held_backoffs)
     async with Reader(channel) as reader:
         await reader.next_resynced()
         proxy.cut()

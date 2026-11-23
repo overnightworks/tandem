@@ -272,23 +272,31 @@ def held_backoffs() -> Backoffs:
     return Backoffs(hold=True)
 
 
-@pytest.fixture(params=list(FailureReason))
-async def store_failure(
-    request: pytest.FixtureRequest,
+@pytest.fixture
+async def refused_store(
     proxy: TcpProxy,
-    proxied_client: Redis,
     url_denying: Callable[[str], Awaitable[str]],
     observer: Redis,
     key_prefix: str,
     make_client: Callable[..., Redis],
 ) -> StoreFailure:
+    """A refusal of the store's commands that a test begins and ends; allowed until it begins."""
+    client = make_client(await url_denying("flushall"))
+    return StoreFailure(FailureReason.REFUSED, client, proxy, observer, key_prefix)
+
+
+@pytest.fixture(params=list(FailureReason))
+def store_failure(
+    request: pytest.FixtureRequest,
+    proxy: TcpProxy,
+    proxied_client: Redis,
+    observer: Redis,
+    key_prefix: str,
+) -> StoreFailure:
     """The same scenario with an outage of the store and with a refusal of its commands."""
-    client = (
-        proxied_client
-        if request.param is FailureReason.OUTAGE
-        else make_client(await url_denying("flushall"))
-    )
-    return StoreFailure(request.param, client, proxy, observer, key_prefix)
+    if request.param is FailureReason.OUTAGE:
+        return StoreFailure(request.param, proxied_client, proxy, observer, key_prefix)
+    return request.getfixturevalue("refused_store")
 
 
 @pytest.fixture

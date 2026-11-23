@@ -1,5 +1,5 @@
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import timedelta
 
 import pytest
@@ -385,21 +385,19 @@ async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_key_is_handl
 
 
 async def test_a_refusal_is_ridden_out_with_one_warning_and_one_recovery_once_the_acl_is_restored(
-    url_denying: Callable[[str], Awaitable[str]],
-    observer: Redis,
-    key_prefix: str,
-    make_client: Callable[..., Redis],
+    refused_store: StoreFailure,
     recording_deadlines: Callable[[Redis, Backoffs], BackoffRecordingDeadlines],
     backoffs: Backoffs,
     log_lines: LogLines,
 ):
     """Spec: DEADLINE-25, LOG-29."""
-    deadlines = recording_deadlines(make_client(await url_denying("evalsha")), backoffs)
+    deadlines = recording_deadlines(refused_store.client, backoffs)
+    await refused_store.begin()
 
     async with serving(deadlines, Handler[Due]()) as task:
         await backoffs.reached(3)
         assert not task.done()
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
+        await refused_store.end()
         failure, recovery = await log_lines.await_of("deadline_round.ended", LOGGER, count=2)
         assert not task.done()
 

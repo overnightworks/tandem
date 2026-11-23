@@ -7,6 +7,7 @@ from redis.backoff import NoBackoff
 
 from tandem import Liveness, Locks, StoreError
 from tests.support.proxy import TcpProxy
+from tests.support.store_failures import StoreFailure
 
 Operation = Callable[[Locks], Awaitable[object]]
 
@@ -22,14 +23,15 @@ OPERATIONS: list[Operation] = [
 async def test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as_no_outage(
     operation: Operation,
     proxy: TcpProxy,
-    url_denying: Callable[[str], Awaitable[str]],
-    make_client: Callable[..., Redis],
+    proxied_client: Redis,
+    refused_store: StoreFailure,
     new_locks: Callable[..., Locks],
 ):
     """Spec: STORE-1."""
-    cut = new_locks(make_client(proxy.url, retry=Retry(NoBackoff(), 0)))
-    refused = new_locks(make_client(await url_denying("evalsha")))
+    cut = new_locks(proxied_client)
+    refused = new_locks(refused_store.client)
     proxy.cut()
+    await refused_store.begin()
 
     with pytest.raises(StoreError) as outage:
         await operation(cut)
