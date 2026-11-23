@@ -1,17 +1,28 @@
 """Deadlines: keys that come due on Redis TIME and reach one claimer at a time."""
 
+import asyncio
+import logging
 import math
 import secrets
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import cast
+from typing import NoReturn, Protocol, cast
+
+from logline import StepTimer, unit_trace
 
 from tandem.client import Client
+from tandem.errors import BACKOFF_FIRST_SECONDS, StoreError, failure_reason, next_backoff
 from tandem.keys import DeadlineKeys, deadline_keys
 from tandem.script import Script
 
+logger: logging.Logger = logging.getLogger(__name__)
+
 _MILLISECOND = timedelta(milliseconds=1)
 _TOKEN_BYTES = 16  # 128 random bits per claim
+_BATCH = 8  # keys claimed at once, so a claim does not run out while its batch waits
+_CLAIM_EXTENSIONS_PER_CLAIM = 3
 
 _KEYS = "local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}\n"
 
@@ -178,6 +189,268 @@ class Deadlines(DeadlineQueue):
         positive.
         """
         super().__init__(redis, deadline_keys(key_prefix, kind), claim_for)
+        self._kind = kind
+        self._claim_for = claim_for
+
+    async def serve_due(
+        self,
+        handle: Callable[[Due], Awaitable[None]],
+        *,
+        every: timedelta,
+        reconcile: Callable[[], Awaitable[None]] | None = None,
+    ) -> NoReturn:
+        """Hand every due key to `handle`, at least once, until cancelled.
+
+        Each `every`, `reconcile` runs when given, where a host arms its keys, and the due keys are
+        claimed in small batches until none is due. While `handle` runs its claim is extended every
+        `claim_for / 3`; an extension that fails stops, and `handle` keeps running. `done` follows a
+        `handle` that returns; one that ends the claim itself (`recur`, `done`, `cancel`) leaves
+        that standing. One that raises is logged and its key returns when its claim runs out, unless
+        it ended the claim first. An outage or a refusal of Redis, from `reconcile`, a claim or a
+        `done`, is ridden out with a back-off; any other exception from `reconcile` ends the loop.
+        Cancelling the loop cancels the running `handle` and leaves its claim to run out.
+        """
+        await serve_queue(
+            self,
+            handle,
+            claim_for=self._claim_for,
+            every=every,
+            before_claim=reconcile,
+            back_off=self._back_off,
+            lines=_DeadlineLines(self._kind),
+        )
+
+    async def _back_off(self, seconds: float) -> None:
+        await asyncio.sleep(seconds)
+
+
+class ServingLines(Protocol):
+    """What a serving loop writes: each owner names its own events, which logline's check reads as
+    literals, and the fields that identify its keys."""
+
+    def round_counts(self, claimed: int, failed: int) -> dict[str, int]: ...
+
+    def round_timer(self) -> StepTimer: ...
+
+    def handling_timer(self, due: Due) -> StepTimer: ...
+
+    def handler_failed(self, due: Due, error: Exception) -> None: ...
+
+    def extension_failed(self, due: Due, error: StoreError) -> None: ...
+
+    def claim_expired(self, due: Due) -> None: ...
+
+
+class _DeadlineLines:
+    def __init__(self, kind: str) -> None:
+        self._kind = kind
+
+    def round_counts(self, claimed: int, failed: int) -> dict[str, int]:
+        return {"deadline_count": claimed, "failed_count": failed}
+
+    def round_timer(self) -> StepTimer:
+        return StepTimer(
+            "deadline_round.ended", logger, deadline_kind=self._kind, **self.round_counts(0, 0)
+        )
+
+    def handling_timer(self, due: Due) -> StepTimer:
+        return StepTimer("deadline_handling.ended", logger, deadline_kind=self._kind)
+
+    def handler_failed(self, due: Due, error: Exception) -> None:
+        logger.error(
+            "deadline_handler.failed",
+            extra={"error_type": type(error).__name__, "deadline_kind": self._kind},
+            exc_info=error,
+        )
+
+    def extension_failed(self, due: Due, error: StoreError) -> None:
+        logger.warning(
+            "deadline_claim_extension.failed",
+            extra={
+                "reason": failure_reason(error),
+                "error_type": type(error).__name__,
+                "deadline_kind": self._kind,
+            },
+        )
+
+    def claim_expired(self, due: Due) -> None:
+        logger.warning("deadline_claim.expired", extra={"deadline_kind": self._kind})
+
+
+@dataclass
+class _RoundTally:
+    """What one round did, for its line."""
+
+    claimed: int = 0
+    failed: int = 0
+
+    def end(self, timer: StepTimer, lines: ServingLines, *, cancelled: bool = False) -> None:
+        timer.add(**lines.round_counts(self.claimed, self.failed))
+        if cancelled:
+            timer.end_cancelled()
+        else:
+            timer.end()
+
+
+def _store_error_in(failure: BaseException) -> StoreError | None:
+    """The `StoreError`, which names Redis, that `failure` is or chains or groups; else None."""
+    unvisited, visited = [failure], set[int]()
+    while unvisited:
+        error = unvisited.pop()
+        if isinstance(error, StoreError):
+            return error
+        if id(error) in visited:
+            continue
+        visited.add(id(error))
+        unvisited.extend(link for link in (error.__cause__, error.__context__) if link is not None)
+        if isinstance(error, BaseExceptionGroup):
+            unvisited.extend(error.exceptions)
+    return None
+
+
+async def serve_queue(
+    queue: DeadlineQueue,
+    handle: Callable[[Due], Awaitable[None]],
+    *,
+    claim_for: timedelta,
+    every: timedelta,
+    before_claim: Callable[[], Awaitable[None]] | None,
+    back_off: Callable[[float], Awaitable[None]],
+    lines: ServingLines,
+) -> NoReturn:
+    """Serve what comes due on `queue` until cancelled: the loop of `serve_due` and `serve_lapses`.
+
+    Each round runs `before_claim`, then claims batches until none is due and hands each key to
+    `handle`. A round fails when a `StoreError`, or an exception chaining one, leaves the
+    `before_claim`, a claim or a `done`; the loop backs off and goes on. Any other exception that
+    is not `handle`'s ends the loop.
+    """
+    pause = checked_span(every, argument="every").total_seconds()
+    serving = _Serving(queue, handle, claim_for.total_seconds(), before_claim, lines)
+    backoff = BACKOFF_FIRST_SECONDS
+    failed_runs = 0
+    while True:
+        if await serving.round(failed_runs):
+            failed_runs += 1
+            await back_off(backoff)
+            backoff = next_backoff(backoff)
+            continue
+        failed_runs = 0
+        backoff = BACKOFF_FIRST_SECONDS
+        await asyncio.sleep(pause)
+
+
+class _Serving:
+    def __init__(
+        self,
+        queue: DeadlineQueue,
+        handle: Callable[[Due], Awaitable[None]],
+        claim_seconds: float,
+        before_claim: Callable[[], Awaitable[None]] | None,
+        lines: ServingLines,
+    ) -> None:
+        self._queue = queue
+        self._handle = handle
+        self._claim_seconds = claim_seconds
+        self._before_claim = before_claim
+        self._lines = lines
+
+    async def round(self, failed_runs: int) -> bool:
+        """One round in a trace of its own; True when it failed on Redis.
+
+        It writes a line when it claimed a key, when it is the first failed round of a run and when
+        it ends such a run; `failed_runs` is the number of failed rounds just before it.
+        """
+        timer = self._lines.round_timer()
+        tally = _RoundTally()
+        with unit_trace(None):
+            try:
+                if self._before_claim is not None:
+                    await self._before_claim()
+                batch = await self._queue.claim_due(limit=_BATCH)
+                if not batch and not failed_runs:
+                    return False
+                while batch:
+                    await self._handle_batch(batch, tally)
+                    batch = await self._queue.claim_due(limit=_BATCH)
+            except Exception as error:
+                store_error = _store_error_in(error)
+                if store_error is None:
+                    raise
+                if not failed_runs:
+                    timer.handled()
+                    timer.fail(failure_reason(store_error))
+                    tally.end(timer, self._lines)
+                return True
+            except asyncio.CancelledError:
+                if tally.claimed:
+                    tally.end(timer, self._lines, cancelled=True)
+                raise
+            if failed_runs:
+                timer.add(failed_run_count=failed_runs)
+            tally.end(timer, self._lines)
+        return False
+
+    async def _handle_batch(self, batch: list[Due], tally: _RoundTally) -> None:
+        pending = set(batch)
+        extender = asyncio.create_task(self._extend_while_pending(pending))
+        try:
+            for due in batch:
+                await self._handle_one(due, pending, tally)
+        finally:
+            extender.cancel()
+            await asyncio.gather(extender, return_exceptions=True)
+
+    async def _handle_one(self, due: Due, pending: set[Due], tally: _RoundTally) -> None:
+        tally.claimed += 1
+        failure = None
+        with unit_trace(None):
+            try:
+                async with self._lines.handling_timer(due):
+                    await self._handle(due)
+            except Exception as error:
+                failure = error
+                if _store_error_in(error) is None:
+                    self._lines.handler_failed(due, error)
+        pending.discard(due)
+        if failure is not None:
+            tally.failed += 1
+            return
+        await self._queue.done(due)
+
+    async def _extend_while_pending(self, pending: set[Due]) -> None:
+        runs_out_at = dict.fromkeys(pending, time.monotonic() + self._claim_seconds)
+        unextended: set[Due] = set()
+        while True:
+            await asyncio.sleep(self._claim_seconds / _CLAIM_EXTENSIONS_PER_CLAIM)
+            for due in tuple(pending):
+                await self._extend_claim(due, pending, unextended, runs_out_at)
+
+    async def _extend_claim(
+        self,
+        due: Due,
+        pending: set[Due],
+        unextended: set[Due],
+        runs_out_at: dict[Due, float],
+    ) -> None:
+        if due in unextended:
+            kept = time.monotonic() < runs_out_at[due]
+        else:
+            try:
+                kept = await self._queue.extend(due)
+            except StoreError as error:
+                self._lines.extension_failed(due, error)
+                if error.outage:
+                    # Redis may have applied the extension before its reply was lost, so
+                    # the claim's end is unknown: stop watching rather than call it expired.
+                    pending.discard(due)
+                else:
+                    unextended.add(due)
+                return
+            runs_out_at[due] = time.monotonic() + self._claim_seconds
+        if not kept:
+            self._lines.claim_expired(due)
+            pending.discard(due)
 
 
 def checked_span(value: timedelta, *, argument: str) -> timedelta:

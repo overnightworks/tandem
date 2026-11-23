@@ -5,8 +5,6 @@ from datetime import timedelta
 import pytest
 from logline import Outcome, StepTimer
 from redis.asyncio import Redis
-from redis.asyncio.retry import Retry
-from redis.backoff import NoBackoff
 
 from tandem import Deadlines, Due, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
@@ -48,16 +46,11 @@ def recording_deadlines(
 
 @pytest.fixture
 def deadlines_through_proxy(
-    proxy: TcpProxy,
-    make_client: Callable[..., Redis],
+    proxied_client: Redis,
     recording_deadlines: Callable[[Redis, Backoffs], BackoffRecordingDeadlines],
 ) -> Callable[[Backoffs], BackoffRecordingDeadlines]:
-    """Deadlines through the proxy whose client never retries."""
-
-    def build(backoffs: Backoffs) -> BackoffRecordingDeadlines:
-        return recording_deadlines(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), backoffs)
-
-    return build
+    """Deadlines through the proxy whose back-offs go to `backoffs`."""
+    return lambda backoffs: recording_deadlines(proxied_client, backoffs)
 
 
 def _host_error_over_a_refusal() -> Exception:
@@ -363,6 +356,25 @@ async def test_a_whole_outage_writes_one_failed_line_and_one_recovery_counting_i
     assert backoffs.delays[0] == BACKOFF_FIRST_SECONDS
     assert backoffs.delays[1] > backoffs.delays[0]
     assert len(log_lines.of("deadline_round.ended", LOGGER)) == 2
+
+
+async def test_a_short_outage_is_ridden_out_with_real_waits_and_the_key_is_handled_after_it(
+    proxy: TcpProxy,
+    proxied_client: Redis,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+):
+    """Spec: DEADLINE-25."""
+    through_proxy = new_deadlines(proxied_client, claim_for=CLAIM_FOR)
+    handler = Handler[Due]()
+
+    async with serving(through_proxy, handler):
+        proxy.cut()
+        await proxy.attempts_reached(1)
+        proxy.restore()
+        await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
+        await handler.received()
 
 
 async def test_a_refusal_is_ridden_out_with_one_warning_and_one_recovery_once_the_acl_is_restored(

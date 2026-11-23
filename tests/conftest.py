@@ -12,6 +12,7 @@ from fakeredis import FakeAsyncRedis, FakeServer
 from logline.testing import configured
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
+from redis.backoff import NoBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 
 from tandem import Client, Deadlines, Leases, Locks, Slots
@@ -184,6 +185,12 @@ async def make_client(key_prefix: str) -> AsyncIterator[Callable[..., Redis]]:
     yield make
     for client in made:
         await client.aclose()
+
+
+@pytest.fixture
+def proxied_client(proxy: TcpProxy, make_client: Callable[..., Redis]) -> Redis:
+    """A client through the proxy that never retries, so an outage reaches the caller at once."""
+    return make_client(proxy.url, retry=Retry(NoBackoff(), 0))
 
 
 @pytest.fixture

@@ -46,16 +46,10 @@ def recording_leases(
 
 @pytest.fixture
 def leases_through_proxy(
-    proxy: TcpProxy,
-    make_client: Callable[..., Redis],
-    recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases],
+    proxied_client: Redis, recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases]
 ) -> Callable[[Backoffs], BackoffRecordingLeases]:
-    """Leases through the proxy whose back-offs go to `backoffs` and whose client never retries."""
-
-    def build(backoffs: Backoffs) -> BackoffRecordingLeases:
-        return recording_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), backoffs)
-
-    return build
+    """Leases through the proxy whose back-offs go to `backoffs`."""
+    return lambda backoffs: recording_leases(proxied_client, backoffs)
 
 
 async def _process_line(process: asyncio.subprocess.Process) -> str:
