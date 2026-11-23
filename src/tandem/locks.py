@@ -293,11 +293,13 @@ class Locks:
         self, keeping: _Keeping, name: str, generation: str, *, failure_is_hidden: bool
     ) -> None:
         """The exit's second phase. A cancellation of the first phase hides a failed release: the
-        failure is then logged once as `lock_release.failed`."""
+        failure is then logged once as `lock_release.failed`, and its timed line is a warning."""
         if keeping.lost:
             return
         try:
-            async with self._step("lock_release.ended"):
+            async with self._step("lock_release.ended") as timer:
+                if failure_is_hidden:
+                    timer.handled()
                 await finished_despite_cancellation(
                     asyncio.create_task(self._release_untimed(name, generation)),
                     self._log_release_failed,

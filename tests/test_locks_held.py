@@ -545,6 +545,8 @@ async def test_a_cancellation_in_the_first_exit_phase_that_hides_a_failed_releas
     assert task.cancelled()
     (failure,) = log_lines.of("lock_release.failed", _LOGGER)
     assert failure["error_type"] == StoreError.__name__
+    errors = [line for line in log_lines.of_logger(_LOGGER) if line["level"] == "error"]
+    assert errors == [failure]
 
 
 async def test_the_release_line_is_written_in_the_trace_that_entered_held(
