@@ -35,6 +35,7 @@ class _GatedLocks(Locks):
         self.release_gate = asyncio.Event()
         self.extend_gate.set()
         self.release_gate.set()
+        self.release_traceparent: str | None = None
         self._extensions = 0
 
     async def _extend_untimed(self, name: str, generation: str) -> bool:
@@ -46,6 +47,7 @@ class _GatedLocks(Locks):
 
     async def _release_untimed(self, name: str, generation: str) -> bool:
         self.releasing.set()
+        self.release_traceparent = current_traceparent()
         await self.release_gate.wait()
         return await super()._release_untimed(name, generation)
 
@@ -515,6 +517,53 @@ async def test_a_cancellation_in_the_first_exit_phase_is_held_until_both_phases_
     assert (await locks.state(NAME)).liveness is Liveness.GONE
 
 
+async def test_a_cancellation_in_the_first_exit_phase_that_hides_a_failed_release_logs_it_once(
+    url_denying: Callable[[str], Awaitable[str]],
+    new_gated_locks: Callable[..., _GatedLocks],
+    observer: Redis,
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    """Spec: LOCK-17, LOG-35."""
+    locks = new_gated_locks(await url_denying("flushall"))
+    locks.extend_gate.clear()
+    generation = await _acquired(locks)
+    cancelled_itself = asyncio.Event()
+
+    async def block() -> None:
+        async with locks.held(NAME, generation, every=EVERY):
+            await locks.extending.wait()
+            task = asyncio.current_task()
+            assert task is not None
+            task.cancel()  # lands at the exit's first await, which waits for the extension
+            cancelled_itself.set()
+
+    task = asyncio.create_task(block())
+    await within(cancelled_itself.wait())
+    await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
+    locks.extend_gate.set()
+    await asyncio.gather(task, return_exceptions=True)
+
+    assert task.cancelled()
+    (failure,) = log_lines.of("lock_release.failed", _LOGGER)
+    assert failure["error_type"] == StoreError.__name__
+
+
+async def test_the_release_runs_inside_its_own_span_in_the_exiting_task(
+    new_gated_locks: Callable[..., _GatedLocks],
+):
+    """Spec: LOCK-17, LOG-5."""
+    locks = new_gated_locks()
+    generation = await _acquired(locks)
+
+    with unit_trace(None):
+        async with locks.held(NAME, generation, every=EVERY):
+            traceparent_of_the_block = current_traceparent()
+
+    assert traceparent_of_the_block is not None
+    assert locks.release_traceparent not in (None, traceparent_of_the_block)
+
+
 async def test_a_cancellation_in_the_second_exit_phase_is_held_until_the_release_ends(
     new_gated_locks: Callable[..., _GatedLocks],
 ):
@@ -627,3 +676,22 @@ async def test_cancel_mode_exited_in_another_task_raises_runtime_error_after_the
         await exit_task
 
     assert (await pod.state(NAME)).liveness is Liveness.GONE
+
+
+async def test_cancel_mode_exited_in_another_task_withdraws_the_cancels_the_keeper_delivered(
+    pod: Locks, observer: Redis, key_prefix: str
+):
+    """Spec: LOCK-16, LOCK-17."""
+    generation = await _acquired(pod)
+    task = asyncio.current_task()
+    assert task is not None
+    stack = AsyncExitStack()
+    await stack.enter_async_context(pod.held(NAME, generation, every=EVERY))
+    await wipe(observer, key_prefix)
+    await _absorbs_one_cancel_and_returns()  # the keeper's cancel lands and is absorbed
+    exit_task = asyncio.create_task(stack.aclose())
+
+    with pytest.raises(RuntimeError):
+        await exit_task
+
+    assert task.cancelling() == 0

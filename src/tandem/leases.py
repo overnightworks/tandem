@@ -222,7 +222,7 @@ class Hold:
 
 
 async def finished_despite_cancellation(
-    cleanup: asyncio.Task[None], on_failed: Callable[[BaseException], None]
+    cleanup: asyncio.Task[object], on_failed: Callable[[BaseException], None]
 ) -> None:
     """Wait for `cleanup` however often the caller is cancelled, then propagate the cancellation.
 

@@ -251,9 +251,7 @@ class Locks:
         finally:
             keeping.stopping.set()  # from here the keeper cancels nothing
             exits_in_the_entering_task = keeping.exits_in_the_entering_task()
-            cancelled_by_the_keeper = exits_in_the_entering_task and keeping.withdraw_cancels(
-                block_error
-            )
+            cancelled_by_the_keeper = keeping.withdraw_cancels(block_error)
             await self._leave(keeping, keeper, name, generation)
             if not exits_in_the_entering_task:
                 raise RuntimeError(
@@ -282,24 +280,28 @@ class Locks:
         self, keeping: _Keeping, keeper: asyncio.Task[None], name: str, generation: str
     ) -> None:
         """The exit's two phases, which a cancellation holds until both end: the keeper's last
-        extension, then the release unless the lock was lost, which writes no release line."""
-        async with contextlib.AsyncExitStack() as release_line:
-            release_line.push_async_exit(self._step("lock_release.ended"))
-            try:
-                await finished_despite_cancellation(
-                    asyncio.create_task(self._finish(keeping, keeper, name, generation)),
-                    self._log_release_failed,
-                )
-            finally:
-                if keeping.lost:
-                    release_line.pop_all()
-
-    async def _finish(
-        self, keeping: _Keeping, keeper: asyncio.Task[None], name: str, generation: str
-    ) -> None:
-        await keeper
+        extension, untimed, then the release unless the lock was lost, which writes no release
+        line and whose line is timed from its start."""
+        cancelled: asyncio.CancelledError | None = None
+        try:
+            await finished_despite_cancellation(keeper, self._log_release_failed)
+        except asyncio.CancelledError as cancellation:
+            cancelled = cancellation
         if not keeping.lost:
-            await self._release_untimed(name, generation)
+            try:
+                async with self._step("lock_release.ended"):
+                    await finished_despite_cancellation(
+                        asyncio.create_task(self._release_untimed(name, generation)),
+                        self._log_release_failed,
+                    )
+            except asyncio.CancelledError as cancellation:
+                cancelled = cancellation
+            except Exception as failure:
+                if cancelled is None:
+                    raise
+                self._log_release_failed(failure)
+        if cancelled is not None:
+            raise cancelled
 
     def _log_release_failed(self, failure: BaseException) -> None:
         logger.error(
