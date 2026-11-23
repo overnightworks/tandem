@@ -16,6 +16,7 @@ forbidden_modules =
     pytest
     pytest_asyncio
     pytest_cov
+    pytest_randomly
     xdist
 
 [importlinter:contract:tandem-imports-no-structlog]
