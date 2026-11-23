@@ -264,7 +264,9 @@ def held_backoffs() -> Backoffs:
 
 @pytest.fixture
 def restartable_redis_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
-    """The URL of the server a test may shut down or flush; Docker's restart policy brings it back.
+    """The URL of the server a test may shut down or flush; a loop in its container restarts it.
+
+    Docker's restart policy is deliberately not used: its delay doubles with every restart.
 
     One test at a time holds the server, across xdist workers, because a shutdown or a script flush
     is state every other user of it would observe.

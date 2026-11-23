@@ -1,4 +1,8 @@
-"""A Redis restart as a test drives it: SHUTDOWN, then a wait until the server answers again."""
+"""A Redis restart as a test drives it: SHUTDOWN, then a wait until the server answers again.
+
+A loop in the restartable container starts the server again at once; Docker's restart policy is
+deliberately not used, because its delay doubles with every restart.
+"""
 
 import contextlib
 
