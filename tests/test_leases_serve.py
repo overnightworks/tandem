@@ -555,9 +555,8 @@ async def test_a_handling_whose_claim_was_deleted_says_claim_not_kept_whether_it
         (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
 
     failed = raised is not None
-    assert (line["level"], line["outcome"]) == (
-        ("error", Outcome.FAILED) if failed else ("warning", Outcome.OK)
-    )
+    expected = ("error", Outcome.FAILED) if failed else ("warning", Outcome.OK)
+    assert (line["level"], line["outcome"]) == expected
     assert line.get("error_type") == (raised.__name__ if raised else None)
     assert line["claim_kept"] is False
     assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")

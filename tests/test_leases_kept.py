@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from datetime import timedelta
 from typing import Any
 
@@ -187,10 +188,12 @@ async def test_a_block_that_exits_during_a_run_of_failed_renewals_writes_nothing
         attempts=attempts,
     )
 
-    with pytest.raises(StoreError):  # the end at the exit cannot reach the cut store
-        async with leases.kept("pod-a", every=EVERY):
-            proxy.cut()
-            await attempts.failed(2)
+    async with AsyncExitStack() as stack:
+        await stack.enter_async_context(leases.kept("pod-a", every=EVERY))
+        proxy.cut()
+        await attempts.failed(2)
+        with pytest.raises(StoreError):  # the end at the exit cannot reach the cut store
+            await stack.aclose()
 
     assert [line["outcome"] for line in log_lines.of("lease_keeping.ended", _LOGGER)] == [
         Outcome.FAILED
