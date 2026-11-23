@@ -1,8 +1,0 @@
-claim_id = "f6d23df837d94f008f87826f9303a270"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "878534408dc5bac10c828033c488a55398843396"
-branch = "claude/issue-97-take-logline-v1-9-0"
-scope = ["docs/reference.md", "pyproject.toml", "tests/test_wake_basic.py", "uv.lock"]
-opened_commit = "a925531681f698b6fd2cb13f794072c3300195b5"
-whole_reason = "One dev pin raise, the one assertion it breaks and the reference sentence that names the published trace."
