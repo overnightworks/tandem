@@ -1,14 +1,20 @@
-"""Tools of the deadline tests: Redis's clock, a wait for a due key and a read of a key's state."""
+"""Tools of the deadline tests: Redis's clock, a wait for a due key, a read of a key's state and a
+running serving loop with the handler it calls."""
 
+import asyncio
+import contextlib
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from datetime import timedelta
-from typing import cast
+from typing import Any, NoReturn, cast
 
 from redis.asyncio import Redis
 
 from tandem import Deadlines, Due, Script
-from tests.support.waiting import until
+from tests.support.waiting import until, within
 
 TwoPods = tuple[Redis, Deadlines, Deadlines]
+
+SERVING_EVERY = timedelta(milliseconds=50)
 
 KEYS_OF_THE_SCRIPT = "local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}\n"
 _STATE_SCRIPT = KEYS_OF_THE_SCRIPT + "return tandem.deadline_state(keys, ARGV[1])"
@@ -78,3 +84,54 @@ def assert_waits_for(
     assert state[0] == "waiting"
     span_ms = int(span.total_seconds() * 1000)
     assert before_ms + span_ms <= state[1] <= after_ms + span_ms
+
+
+class Handler[Item]:
+    """A serving loop's handler: it records what it received and may hold each until released."""
+
+    def __init__(self, *, hold: bool = False) -> None:
+        self.items: list[Item] = []
+        self._release = asyncio.Event()
+        self._hold = hold
+
+    def release(self) -> None:
+        self._release.set()
+
+    async def __call__(self, item: Item) -> None:
+        self.items.append(item)
+        if self._hold:
+            await self._release.wait()
+
+    async def received(self, count: int = 1) -> list[Item]:
+        async def enough() -> bool:
+            return len(self.items) >= count
+
+        await until(enough)
+        return self.items
+
+
+@contextlib.asynccontextmanager
+async def running(serve: Coroutine[Any, Any, NoReturn]) -> AsyncIterator[asyncio.Task[NoReturn]]:
+    """Run a serving loop as a task for the body of the block, then cancel it."""
+    task = asyncio.create_task(serve)
+    try:
+        yield task
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+def serving(
+    deadlines: Deadlines,
+    handle: Callable[[Due], Awaitable[None]],
+    *,
+    reconcile: Callable[[], Awaitable[None]] | None = None,
+) -> contextlib.AbstractAsyncContextManager[asyncio.Task[NoReturn]]:
+    """Run `serve_due` with `handle` as a task for the body of the block."""
+    return running(deadlines.serve_due(handle, every=SERVING_EVERY, reconcile=reconcile))
+
+
+async def ended(task: asyncio.Task[Any]) -> BaseException | None:
+    """The exception a task ended with, waiting for it within the bound."""
+    await within(asyncio.wait([task]))
+    return task.exception()

@@ -1,54 +1,31 @@
 """Tools of the lease tests: a running `serve_lapses`, what it handled and a wiped app."""
 
 import asyncio
-import contextlib
-from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import timedelta
+from collections.abc import Awaitable, Callable
+from contextlib import AbstractAsyncContextManager
+from typing import NoReturn
 
 from redis.asyncio import Redis
 
 from tandem import Lapse, Leases, Liveness
 from tandem.keys import lease_keys
-from tests.support.waiting import until, within
+from tests.support.deadlines import SERVING_EVERY, Handler, running
+from tests.support.waiting import until
 
-SERVING_EVERY = timedelta(milliseconds=50)
 
-
-class Handled:
+class Handled(Handler[Lapse]):
     """The lapses a `serve_lapses` handler received, and how it is held or released."""
 
-    def __init__(self, *, hold: bool = False) -> None:
-        self.lapses: list[Lapse] = []
-        self._release = asyncio.Event()
-        self._hold = hold
-
-    def release(self) -> None:
-        self._release.set()
-
-    async def __call__(self, lapse: Lapse) -> None:
-        self.lapses.append(lapse)
-        if self._hold:
-            await self._release.wait()
-
-    async def received(self, count: int = 1) -> list[Lapse]:
-        async def enough() -> bool:
-            return len(self.lapses) >= count
-
-        await until(enough)
-        return self.lapses
+    @property
+    def lapses(self) -> list[Lapse]:
+        return self.items
 
 
-@contextlib.asynccontextmanager
-async def serving(
+def serving(
     leases: Leases, handle: Callable[[Lapse], Awaitable[None]]
-) -> AsyncIterator[asyncio.Task[None]]:
+) -> AbstractAsyncContextManager[asyncio.Task[NoReturn]]:
     """Run `serve_lapses` with `handle` as a task for the body of the block."""
-    task = asyncio.create_task(leases.serve_lapses(handle, every=SERVING_EVERY))
-    try:
-        yield task
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+    return running(leases.serve_lapses(handle, every=SERVING_EVERY))
 
 
 async def wipe(observer: Redis, key_prefix: str, family: str) -> None:
@@ -62,12 +39,6 @@ async def wipe(observer: Redis, key_prefix: str, family: str) -> None:
         keys.lapse.claimed,
         keys.lapse.claim,
     )
-
-
-async def ended(task: asyncio.Task[None]) -> BaseException | None:
-    """The exception a task ended with, waiting for it within the bound."""
-    await within(asyncio.wait([task]))
-    return task.exception()
 
 
 async def liveness_of(leases: Leases, holder: str) -> Liveness:

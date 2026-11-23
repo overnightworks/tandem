@@ -15,15 +15,8 @@ from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
-from tests.support.deadlines import redis_ms, until_redis_ms
-from tests.support.leases import (
-    SERVING_EVERY,
-    Handled,
-    ended,
-    liveness_of,
-    serving,
-    until_gone,
-)
+from tests.support.deadlines import SERVING_EVERY, redis_ms, until_redis_ms
+from tests.support.leases import Handled, liveness_of, serving, until_gone
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.waiting import elapsed, until, within
@@ -33,20 +26,34 @@ CLAIM_FOR = timedelta(milliseconds=300)
 
 
 @pytest.fixture
-def leases_through_proxy(
-    proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str
-) -> Callable[[Backoffs], BackoffRecordingLeases]:
-    """Leases through the proxy whose back-offs go to `backoffs` and whose client never retries."""
+def recording_leases(
+    key_prefix: str,
+) -> Callable[[Redis, Backoffs], BackoffRecordingLeases]:
+    """Leases over a client whose back-offs after a failed round go to `backoffs`."""
 
-    def build(backoffs: Backoffs) -> BackoffRecordingLeases:
+    def build(client: Redis, backoffs: Backoffs) -> BackoffRecordingLeases:
         return BackoffRecordingLeases(
-            make_client(proxy.url, retry=Retry(NoBackoff(), 0)),
+            client,
             key_prefix=key_prefix,
             family="owner",
             lasts=LASTS,
             claim_for=CLAIM_FOR,
             backoffs=backoffs,
         )
+
+    return build
+
+
+@pytest.fixture
+def leases_through_proxy(
+    proxy: TcpProxy,
+    make_client: Callable[..., Redis],
+    recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases],
+) -> Callable[[Backoffs], BackoffRecordingLeases]:
+    """Leases through the proxy whose back-offs go to `backoffs` and whose client never retries."""
+
+    def build(backoffs: Backoffs) -> BackoffRecordingLeases:
+        return recording_leases(make_client(proxy.url, retry=Retry(NoBackoff(), 0)), backoffs)
 
     return build
 
@@ -160,16 +167,28 @@ async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handl
     assert backoffs.delays[1] > backoffs.delays[0]
 
 
-async def test_a_refusal_ends_serve_lapses_with_store_error(
+async def test_a_refusal_is_ridden_out_and_the_lapse_is_handled_once_the_acl_is_restored(
     url_denying: Callable[[str], Awaitable[str]],
+    redis_url: str,
+    observer: Redis,
+    key_prefix: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
+    recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases],
+    backoffs: Backoffs,
 ):
     """Spec: LEASE-20."""
-    leases = new_leases(make_client(await url_denying("evalsha")))
-    task = asyncio.create_task(leases.serve_lapses(Handled(), every=SERVING_EVERY))
+    leases = recording_leases(make_client(await url_denying("evalsha")), backoffs)
+    await new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR).renew("pod-a")
+    handled = Handled()
 
-    assert isinstance(await ended(task), StoreError)
+    async with serving(leases, handled) as task:
+        await backoffs.reached(3)
+        assert not task.done()
+        await observer.acl_setuser(key_prefix, enabled=True, commands=["+evalsha"])
+        (lapse,) = await handled.received()
+
+    assert lapse.holder == "pod-a"
 
 
 @pytest.mark.parametrize("lapses", [1, 25])
@@ -618,25 +637,26 @@ async def test_a_round_held_through_an_outage_writes_its_failed_line_only_as_the
 
 
 @pytest.mark.parametrize(
-    ("denied_from_start", "denied_while_handling"),
-    [("evalsha", None), ("hset", None), ("flushall", "zrem")],
+    ("denied_from_start", "denied_while_handling", "lapse_count"),
+    [("evalsha", None, 0), ("hset", None, 0), ("flushall", "zrem", 1)],
     ids=["at the sweep", "at the first claim", "after the first claim"],
 )
-async def test_a_refusal_ends_serve_lapses_without_a_round_line_or_a_warning(
+async def test_a_refusal_writes_one_failed_line_with_its_reason_and_serve_lapses_goes_on(
     denied_from_start: str,
     denied_while_handling: str | None,
+    lapse_count: int,
     url_denying: Callable[[str], Awaitable[str]],
     redis_url: str,
     observer: Redis,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
+    recording_leases: Callable[[Redis, Backoffs], BackoffRecordingLeases],
+    backoffs: Backoffs,
     key_prefix: str,
     log_lines: LogLines,
 ):
-    """Spec: LOG-20, LEASE-20."""
-    leases = new_leases(
-        make_client(await url_denying(denied_from_start)), lasts=LASTS, claim_for=CLAIM_FOR
-    )
+    """Spec: LOG-11, LOG-26, LEASE-20."""
+    leases = recording_leases(make_client(await url_denying(denied_from_start)), backoffs)
     await new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR).renew("pod-a")
     running = Handled(hold=True)
 
@@ -647,13 +667,16 @@ async def test_a_refusal_ends_serve_lapses_without_a_round_line_or_a_warning(
                 key_prefix, enabled=True, commands=[f"-{denied_while_handling}"]
             )
             running.release()
-        refusal = await ended(task)
+        (failure, *_) = await log_lines.await_of("lapse_round.ended", _LOGGER)
+        await backoffs.reached(1)
+        assert not task.done()
 
-    assert isinstance(refusal, StoreError)
-    assert not log_lines.of("lapse_round.ended", _LOGGER)
-    assert not [
-        line for line in log_lines.of_logger(_LOGGER) if line["level"] in ("warning", "error")
-    ]
+    assert (failure["level"], failure["outcome"], failure["reason"]) == (
+        "warning",
+        Outcome.FAILED,
+        "refused",
+    )
+    assert (failure["lapse_count"], failure["failed_count"]) == (lapse_count, 0)
 
 
 async def test_a_round_cancelled_before_it_claimed_a_lapse_writes_no_line(
