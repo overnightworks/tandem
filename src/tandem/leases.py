@@ -219,7 +219,7 @@ def _lease_fields(family: str, holder: str) -> dict[str, str]:
 
 
 def _lease_step_timer(event: str, family: str, holder: str) -> StepTimer:
-    return StepTimer(event, logger, **_lease_fields(family, holder))
+    return StepTimer(event, logger, lease_family=family, holder_id=holder)
 
 
 @dataclass
@@ -403,8 +403,8 @@ class Leases:
         claimed in small batches until none is due. While `handle` runs its claim is extended every
         `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
         exception from it ends the loop. `done` follows a `handle` that returns; one that raises is
-        logged and its lapse returns when its claim runs out. An outage or a refusal of Redis is ridden out with the back-off of the wake channel's
-        following.
+        logged and its lapse returns when its claim runs out. An outage or a refusal of Redis is
+        ridden out with the back-off of the wake channel's following.
         """
 
         async def handle_due(due: Due) -> None:

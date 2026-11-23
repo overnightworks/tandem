@@ -214,9 +214,10 @@ class Deadlines(DeadlineQueue):
         `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
         exception from it ends the loop. `done` follows a `handle` that returns; one that ends the
         claim itself (`recur`, `done`, `cancel`) leaves that standing. One that raises is logged and
-        its key returns when its claim runs out, unless it ended the claim first. An outage or a refusal of Redis, from `reconcile`, a claim or a
-        `done`, is ridden out with a back-off; any other exception from `reconcile` ends the loop.
-        Cancelling the loop cancels the running `handle` and leaves its claim to run out.
+        its key returns when its claim runs out, unless it ended the claim first. An outage or a
+        refusal of Redis, from `reconcile`, a claim or a `done`, is ridden out with a back-off; any
+        other exception from `reconcile` ends the loop. Cancelling the loop cancels the running
+        `handle` and leaves its claim to run out.
         """
         await serve_queue(
             self,
