@@ -22,7 +22,7 @@ dependencies = [
 ]
 ```
 
-tandem declares `overnightworks-logline>=0.3.0,<2` by name, so the host pins the logline tag (`vA.B.C`
+tandem declares `overnightworks-logline>=0.4.0,<2` by name, so the host pins the logline tag (`vA.B.C`
 inside that range) beside tandem's, and one logline runs in the process. A host without that pin asks the
 package index, where the name is not registered. A host's Dependabot entry for uv ignores `overnightworks-*`,
 because Dependabot looks the name up on PyPI. Tags are never moved; a broken release gets the next patch tag.
