@@ -1,8 +1,0 @@
-claim_id = "6afebd2f65ea4336a567d35b3a45d3b0"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "e2d21cfd91cdab5ddcdcacb71b9c03b5a90325bf"
-branch = "claude/issue-109-older-outage-tests-use-the-shared-store"
-scope = ["tests/conftest.py", "tests/test_deadlines_serve.py", "tests/test_leases_kept.py", "tests/test_leases_serve.py", "tests/test_locks_outage.py", "tests/test_wake_cleanup.py"]
-opened_commit = "b4db1cb7515f15aa70c15de2aa3536c0ef116ac2"
-whole_reason = "One move of the hand-built outage and refusal arrangements onto their shared owners; splitting it per module would leave the same copy in the rest."
