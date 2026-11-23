@@ -740,30 +740,9 @@ async def test_serve_lapses_takes_no_claimer_argument(
         leases.serve_lapses(Handled(), every=SERVING_EVERY, claimer="pod-1")  # pyright: ignore[reportCallIssue]
 
 
+@pytest.mark.parametrize("claim_lost", [False, True], ids=["claim kept", "claim lost"])
 async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_cancelled(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    new_leases: Callable[..., Leases],
-    log_lines: LogLines,
-):
-    """Spec: LOG-10, LOG-11, LOG-18."""
-    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
-    await leases.renew("pod-a")
-    running = Handled(hold=True)
-
-    async with serving(leases, running) as task:
-        await running.received()
-        task.cancel()
-        (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
-        (round_line,) = await log_lines.await_of("lapse_round.ended", _LOGGER)
-
-    assert line["outcome"] == Outcome.CANCELLED
-    assert line["holder_id"] == "pod-a"
-    assert (round_line["level"], round_line["outcome"]) == ("info", Outcome.CANCELLED)
-    assert (round_line["lapse_count"], round_line["failed_count"]) == (1, 0)
-
-
-async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it_lost(
+    claim_lost: bool,
     redis_url: str,
     make_client: Callable[..., Redis],
     observer: Redis,
@@ -772,7 +751,7 @@ async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it
     attempts: Attempts,
     log_lines: LogLines,
 ):
-    """Spec: LOG-10, LOG-22."""
+    """Spec: LOG-10, LOG-11, LOG-18, LOG-22."""
     await observed_leases(make_client(redis_url)).renew("pod-a")
     running = Handled(hold=True)
 
@@ -780,13 +759,18 @@ async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it
         observed_leases(make_client(redis_url), claim_for=LONG_CLAIM_FOR), running
     ) as task:
         await running.received()
-        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
-        await attempts.until_unsuccessful()
+        if claim_lost:
+            await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+            await attempts.until_unsuccessful()
         task.cancel()
         (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+        (round_line,) = await log_lines.await_of("lapse_round.ended", _LOGGER)
 
     assert line["outcome"] == Outcome.CANCELLED
+    assert line["holder_id"] == "pod-a"
     assert "claim_kept" not in line
+    assert (round_line["level"], round_line["outcome"]) == ("info", Outcome.CANCELLED)
+    assert (round_line["lapse_count"], round_line["failed_count"]) == (1, 0)
 
 
 async def test_a_lapse_that_reaches_two_handlers_writes_a_line_for_each(
