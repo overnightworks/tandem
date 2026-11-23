@@ -110,6 +110,7 @@ async def test_kept_renews_while_its_body_runs_and_writes_no_line_for_a_renewal_
         assert await liveness_of(leases, "pod-a") is Liveness.ALIVE
 
     assert len(log_lines.of("lease_renewal.ended", "tandem.leases")) == 1
+    assert not log_lines.of("lease_keeping.ended", _LOGGER)
 
 
 async def test_a_refusal_at_the_first_renewal_raises_out_of_the_entry(
@@ -149,6 +150,7 @@ async def test_a_run_of_failed_renewals_writes_its_first_failure_and_its_recover
         await attempts.failed(2)
         await store_failure.end()
         (failure, recovery) = await log_lines.await_of("lease_keeping.ended", _LOGGER, count=2)
+        await attempts.reached(len(attempts.results) + 2)
         generation = hold.generation
 
     failures = sum(isinstance(result, StoreError) for result in attempts.results)
