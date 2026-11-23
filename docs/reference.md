@@ -134,14 +134,15 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 | [LOG-7] `wake_publication.ended` | `tandem.wake` | info; error when it failed | `outcome`, `duration_ms`; `error_type` when failed |
 | [LOG-8] `lease_renewal.failed`, a background renewal of `kept` | `tandem.leases` | warning | `reason` (`outage` or `refused`), `error_type`, `lease_family`, `holder_id` |
 | [LOG-9] `lease_end.failed`, the end at the exit of `kept` failed after a cancellation | `tandem.leases` | error | `error_type`, `lease_family`, `holder_id` |
-| [LOG-10] `lapse_handling.ended`, one `handle` of `serve_lapses` | `tandem.leases` | info; error when it failed, with a traceback unless the failure holds a `StoreError`, which names Redis | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
-| [LOG-11] `lapse_round.ended`, one round of `serve_lapses` | `tandem.leases` | info with lapses; debug without; warning when an outage failed the round | `outcome`, `duration_ms`, `lease_family`, `lapse_count`, `failed_count` |
+| [LOG-10] `lapse_handling.ended`, one `handle` of `serve_lapses` | `tandem.leases` | info; error when it failed | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
+| [LOG-11] `lapse_round.ended`, one round of `serve_lapses` that claimed a lapse, or the first failure or the recovery of a run of failed rounds | `tandem.leases` | info; warning for the first failure of a run of outages | `outcome`, `duration_ms`, `lease_family`, `lapse_count`, `failed_count`; `failed_run_count` on a recovery; `reason` (`outage`) on a first failure |
 | [LOG-12] `lapse_claim_extension.failed` | `tandem.leases` | warning | `reason`, `error_type`, `lease_family`, `holder_id` |
 | [LOG-13] `lapse_claim.expired`, a claim that ran out after its extension was refused or answered false; never after an outage, whose result is unknown | `tandem.leases` | warning | `lease_family`, `holder_id` |
 | [LOG-14] `wake_subscription.lost`, once per outage; its further attempts | `tandem.wake` | warning; debug | `reason` (`outage`), `error_type`, `failed_attempt_count` |
 | [LOG-15] `wake_subscription.confirmed`, each `on_resync` call | `tandem.wake` | info | `failed_attempt_count` |
 | [LOG-16] `wake_follow.failed`, the following ended after its entry because a handler raised or Redis refused | `tandem.wake` | error | `error_type` |
 | [LOG-17] `wake_payload.skipped` | `tandem.wake` | warning | `reason` (`invalid_utf8` or `malformed_frame`), `payload_bytes` |
+| [LOG-25] `lapse_handler.failed`, a `handle` that raised without a `StoreError` in its failure | `tandem.leases` | error, with the traceback | `error_type`, `lease_family`, `holder_id` |
 
 - [LOG-18] `outcome` is `ok`, `failed` or `cancelled`; a failed call raises `StoreError` after its line, and a
   `False` or `None` answer is `ok`. [LOG-19] A `kept` writes `lease_renewal.ended` for its first renewal only: its
@@ -154,6 +155,12 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 - [LOG-23] A lapse is delivered at least once, so a replayed lapse writes a second `lapse_handling.ended`.
 - [LOG-24] The wake carries its sender's traceparent: `following` calls `on_wake` inside `unit_trace(wake.traceparent)`,
   so the handler's lines are in the sender's trace.
+- [LOG-26] A round that claims no lapse writes no line, except the first failed round of a run of failed rounds (one at
+  the start of `serve_lapses` included) and the first working round after them, whose `failed_run_count` counts them;
+  the run is per `serve_lapses` call. Each round runs in a trace of its own, which the claim-extension lines (LOG-12,
+  LOG-13) share.
+- [LOG-27] Each `handle` runs inside its `lapse_handling.ended` step, so under logline v1.9.0 or later a step the handler
+  opens names that step's span as its parent, and `lapse_handler.failed` shares the handling's `trace_id`.
 
 ## The host's duties
 

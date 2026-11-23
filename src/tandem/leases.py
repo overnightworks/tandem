@@ -12,17 +12,21 @@ from datetime import timedelta
 from enum import StrEnum
 from typing import NoReturn, cast
 
-from logline import Outcome, StepTimer, unit_trace
+from logline import StepTimer, unit_trace
 
 from tandem.client import Client
 from tandem.deadlines import DeadlineQueue, Due, checked_span, milliseconds
-from tandem.errors import BACKOFF_FIRST_SECONDS, StoreError, failure_reason, next_backoff
+from tandem.errors import (
+    BACKOFF_FIRST_SECONDS,
+    FailureReason,
+    StoreError,
+    failure_reason,
+    next_backoff,
+)
 from tandem.keys import lease_keys
 from tandem.script import Script
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-_MILLISECONDS_PER_SECOND = 1000
 
 _TOKEN_BYTES = 16  # 128 random bits per generation
 _BATCH = 8  # lapses claimed at once, so a claim does not run out while its batch waits
@@ -170,10 +174,6 @@ class Roster:
     settled: bool  # `lasts` have passed since the epoch: a missing holder is gone, not lost
 
 
-def _elapsed_ms(started: float) -> float:
-    return round((time.perf_counter() - started) * _MILLISECONDS_PER_SECOND, 3)
-
-
 def _holds_store_error(failure: BaseException) -> bool:
     """True when `failure` or anything it chains or groups is a `StoreError`, which names Redis."""
     unvisited, visited = [failure], set[int]()
@@ -202,6 +202,13 @@ class _RoundTally:
 
     lapse_count: int = 0
     failed_count: int = 0
+
+    def end(self, timer: StepTimer, *, cancelled: bool = False) -> None:
+        timer.add(lapse_count=self.lapse_count, failed_count=self.failed_count)
+        if cancelled:
+            timer.end_cancelled()
+        else:
+            timer.end()
 
 
 @dataclass
@@ -390,18 +397,18 @@ class Leases:
         """
         pause = checked_span(every, argument="every").total_seconds()
         backoff = BACKOFF_FIRST_SECONDS
+        failed_runs = 0
         while True:
-            tally, started = _RoundTally(), time.perf_counter()
             try:
-                await self._serve_round(handle, tally)
+                await self._serve_round(handle, failed_runs)
             except StoreError as error:
                 if not error.outage:
                     raise
-                self._log_round(started, tally, Outcome.FAILED)
+                failed_runs += 1
                 await self._back_off(backoff)
                 backoff = next_backoff(backoff)
                 continue
-            self._log_round(started, tally, Outcome.OK)
+            failed_runs = 0
             backoff = BACKOFF_FIRST_SECONDS
             await asyncio.sleep(pause)
 
@@ -409,11 +416,37 @@ class Leases:
         await asyncio.sleep(seconds)
 
     async def _serve_round(
-        self, handle: Callable[[Lapse], Awaitable[None]], tally: _RoundTally
+        self, handle: Callable[[Lapse], Awaitable[None]], failed_runs: int
     ) -> None:
-        await self._sweep.run(self._key_names(), self._arguments())
-        while batch := await self._lapses.claim_due(limit=_BATCH):
-            await self._handle_batch(handle, batch, tally)
+        """One round in a trace of its own. It writes a line when it claimed a lapse, when it is
+        the first failed round of a run of outages and when it ends such a run; `failed_runs` is
+        the number of failed rounds just before it."""
+        timer = StepTimer(
+            "lapse_round.ended", logger, lease_family=self._family, lapse_count=0, failed_count=0
+        )
+        tally = _RoundTally()
+        with unit_trace(None):
+            try:
+                await self._sweep.run(self._key_names(), self._arguments())
+                batch = await self._lapses.claim_due(limit=_BATCH)
+                if not batch and not failed_runs:
+                    return
+                while batch:
+                    await self._handle_batch(handle, batch, tally)
+                    batch = await self._lapses.claim_due(limit=_BATCH)
+            except StoreError as error:
+                if error.outage and not failed_runs:
+                    timer.handled()
+                    timer.fail(FailureReason.OUTAGE)
+                    tally.end(timer)
+                raise
+            except asyncio.CancelledError:
+                if tally.lapse_count:
+                    tally.end(timer, cancelled=True)
+                raise
+            if failed_runs:
+                timer.add(failed_run_count=failed_runs)
+            tally.end(timer)
 
     async def _handle_batch(
         self, handle: Callable[[Lapse], Awaitable[None]], batch: list[Due], tally: _RoundTally
@@ -436,57 +469,27 @@ class Leases:
     ) -> None:
         lapse = _lapse_of(due)
         tally.lapse_count += 1
-        outcome, failure = Outcome.OK, None
-        started = time.perf_counter()
+        failure = None
         with unit_trace(None):
             try:
-                await handle(lapse)
+                async with self._step_timer("lapse_handling.ended", lapse.holder):
+                    await handle(lapse)
             except Exception as error:
-                outcome, failure = Outcome.FAILED, error
-            except BaseException:
-                outcome = Outcome.CANCELLED
-                raise
-            finally:
-                self._log_handling(lapse, started, outcome, failure)
+                failure = error
+                if not _holds_store_error(error):
+                    logger.error(
+                        "lapse_handler.failed",
+                        extra={
+                            "error_type": type(error).__name__,
+                            **self._lease_fields(lapse.holder),
+                        },
+                        exc_info=error,
+                    )
         pending.discard(due)
         if failure is not None:
             tally.failed_count += 1
             return
         await self._lapses.done(due)
-
-    def _log_handling(
-        self, lapse: Lapse, started: float, outcome: Outcome, failure: Exception | None
-    ) -> None:
-        fields = {
-            **self._lease_fields(lapse.holder),
-            "outcome": outcome,
-            "duration_ms": _elapsed_ms(started),
-        }
-        if failure is None:
-            logger.info("lapse_handling.ended", extra=fields)
-            return
-        logger.error(
-            "lapse_handling.ended",
-            extra={**fields, "error_type": type(failure).__name__},
-            exc_info=None if _holds_store_error(failure) else failure,
-        )
-
-    def _log_round(self, started: float, tally: _RoundTally, outcome: Outcome) -> None:
-        if outcome is Outcome.FAILED:
-            level = logging.WARNING
-        else:
-            level = logging.INFO if tally.lapse_count else logging.DEBUG
-        logger.log(
-            level,
-            "lapse_round.ended",
-            extra={
-                "lease_family": self._family,
-                "outcome": outcome,
-                "duration_ms": _elapsed_ms(started),
-                "lapse_count": tally.lapse_count,
-                "failed_count": tally.failed_count,
-            },
-        )
 
     async def _extend_while_pending(self, pending: set[Due]) -> None:
         claim_seconds = self._claim_for.total_seconds()
