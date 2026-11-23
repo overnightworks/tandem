@@ -1,8 +1,0 @@
-claim_id = "dfa187208cd5433b827c966efa3f08df"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "878534408dc5bac10c828033c488a55398843396"
-branch = "claude/issue-96-tandem-pins-quality-v0-24-0"
-scope = [".github/workflows/ci.yml", ".github/workflows/code-scanning.yml", ".github/workflows/release.yml", ".importlinter", "pyproject.toml", "uv.lock"]
-opened_commit = "79bcafa45823b4cb644c76af17eff0535023c00c"
-whole_reason = "One quality release: its four pins and the lock finding it measures land together."
