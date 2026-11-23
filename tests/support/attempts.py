@@ -6,7 +6,7 @@ from typing import Any
 
 from redis.asyncio import Redis
 
-from tandem import Deadlines, Due, Leases, Renewal, StoreError
+from tandem import Deadlines, Due, Leases, Locks, Renewal, StoreError
 from tandem.deadlines import DeadlineQueue
 from tests.support.waiting import BOUND_SECONDS
 
@@ -86,6 +86,17 @@ class RenewalObservedLeases(Leases):
 
     async def _renew_untimed(self, holder: str) -> Renewal:
         return await self._attempts.observed(super()._renew_untimed(holder))
+
+
+class ExtendObservedLocks(Locks):
+    """`Locks` whose extensions go to `attempts`."""
+
+    def __init__(self, redis: Redis, *, attempts: Attempts, **options: Any) -> None:
+        super().__init__(redis, **options)
+        self._attempts = attempts
+
+    async def _extend_untimed(self, name: str, generation: str) -> bool:
+        return await self._attempts.observed(super()._extend_untimed(name, generation))
 
 
 class ObservedDeadlines(Deadlines):
