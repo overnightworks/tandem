@@ -133,7 +133,7 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 |---|---|---|---|
 | [LOG-3] `lease_renewal.ended`, `lease_end.ended` | `tandem.leases` | info; error when it failed | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
 | [LOG-4] `lease_state_read.ended`, `lease_roster_read.ended` | `tandem.leases` | info; error when it failed | `outcome`, `duration_ms`, `lease_family`; `error_type` when failed |
-| [LOG-5] `lock_acquisition.ended`, `lock_extension.ended`, `lock_release.ended`, `lock_state_read.ended` | `tandem.locks` | info; error when it failed; `lock_release.ended` at the exit of `held` after a hidden failed release is a warning ([LOG-36]) | `outcome`, `duration_ms`, `lock_family`; `error_type` when failed |
+| [LOG-5] `lock_acquisition.ended`, `lock_extension.ended`, `lock_release.ended`, `lock_state_read.ended` | `tandem.locks` | info; error when it failed; `lock_release.ended` at the exit of `held` is a warning when a cancellation before the release hides a failed release and no cancellation reaches the release itself ([LOG-36]) | `outcome`, `duration_ms`, `lock_family`; `error_type` when failed |
 | [LOG-6] `slot_take.ended`, `slot_release.ended` | `tandem.slots` | info; error when it failed | `outcome`, `duration_ms`, `slot_family`; `error_type` when failed. A None or False answer is `ok`; no line carries a pool or a token |
 | [LOG-7] `wake_publication.ended` | `tandem.wake` | info; error when it failed | `outcome`, `duration_ms`; `error_type` when failed |
 | [LOG-8] `lease_keeping.ended`, a background run of renewals of `kept` that fails: its first failed renewal, then the first renewal that succeeds after the run | `tandem.leases` | warning for the first failure, info for the recovery | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `reason` (`outage` or `refused`) when failed; `failed_run_count` at the recovery, which counts the run; the run is per `kept` block |
@@ -161,7 +161,8 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
   `lock_keeping.ended` only for the first failure of a run and its recovery, and `lock.lost` for a loss, and its
   exit writes `lock_release.ended` like a direct `release`, except after a loss; `lock_release.failed` is its one
   error line when a cancellation hides a failed release; that exit's `lock_release.ended` is then a warning, not the
-  info of [LOG-5].
+  info of [LOG-5], only when the cancellation came before the release and the release ran uncancelled; a cancellation
+  during the release leaves `lock_release.ended` at info with outcome `cancelled`.
 - [LOG-20] A refusal that reaches the host as `StoreError` out of the entry of `following` writes no line:
   the host's layer logs it.
 - [LOG-21] A holder is an id (see duty 11), so `holder_id` is the holder string. [LOG-22] No line carries a generation, a lock's name, a lapse's
