@@ -229,10 +229,9 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    `on_resync` and at its periodic idempotent reconcile, and reads GONE as the signal that nobody renews. The
    limits are those of duty 3: a `FLUSHALL` on an open subscription and a host without a wake channel are
    repaired only by the reconcile period.
-8. **Fence the work under a lock with its generation, because a lock can be lost under its holder and only the
-   host's store can refuse what went on after the loss.** `held` stops the block at a loss, or with
-   `cancel_on_loss=False` only tells a block that fences itself; a host that calls `extend` itself stops at its
-   first `False`. A reply lost under the client's `Retry` is replayed as [LOCK-10] and [LOCK-11] state.
+8. **Fence the work under a lock with its generation, because a lock can be lost under its holder:** `held` stops
+   the block at a loss, or only tells a block that fences itself; a host that calls `extend` itself stops at its
+   first `False` ([LOCK-10], [LOCK-11]); work that went on after the loss is refused by the host's own store.
 9. **Extend before `lasts` run out, with one `lasts` per family kept once in configuration every pod reads,
    because only the holder knows it still works.** `held` does it every `every`. A holder whose event loop
    stalls past `lasts` loses its lock to the next `acquire`. Every write stamps its end as Redis time plus the writing pod's span, and every pod reads
