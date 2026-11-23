@@ -35,7 +35,6 @@ class _GatedLocks(Locks):
         self.release_gate = asyncio.Event()
         self.extend_gate.set()
         self.release_gate.set()
-        self.release_traceparent: str | None = None
         self._extensions = 0
 
     async def _extend_untimed(self, name: str, generation: str) -> bool:
@@ -47,7 +46,6 @@ class _GatedLocks(Locks):
 
     async def _release_untimed(self, name: str, generation: str) -> bool:
         self.releasing.set()
-        self.release_traceparent = current_traceparent()
         await self.release_gate.wait()
         return await super()._release_untimed(name, generation)
 
@@ -549,19 +547,46 @@ async def test_a_cancellation_in_the_first_exit_phase_that_hides_a_failed_releas
     assert failure["error_type"] == StoreError.__name__
 
 
-async def test_the_release_runs_inside_its_own_span_in_the_exiting_task(
+async def test_the_release_line_is_written_in_the_trace_that_entered_held(
     new_gated_locks: Callable[..., _GatedLocks],
+    log_lines: LogLines,
 ):
     """Spec: LOCK-17, LOG-5."""
     locks = new_gated_locks()
     generation = await _acquired(locks)
 
     with unit_trace(None):
+        traceparent = current_traceparent()
+        assert traceparent is not None
         async with locks.held(NAME, generation, every=EVERY):
-            traceparent_of_the_block = current_traceparent()
+            pass
 
-    assert traceparent_of_the_block is not None
-    assert locks.release_traceparent not in (None, traceparent_of_the_block)
+    (line,) = log_lines.of("lock_release.ended", _LOGGER)
+    assert line["trace_id"] == traceparent.split("-")[1]
+
+
+async def test_the_release_line_does_not_time_the_wait_for_the_last_extension(
+    new_gated_locks: Callable[..., _GatedLocks],
+    log_lines: LogLines,
+):
+    """Spec: LOCK-17."""
+    locks = new_gated_locks()
+    locks.extend_gate.clear()
+    generation = await _acquired(locks)
+    waited = timedelta(milliseconds=300)
+
+    async def block() -> None:
+        async with locks.held(NAME, generation, every=EVERY):
+            await locks.extending.wait()
+
+    task = asyncio.create_task(block())
+    await within(locks.extending.wait())
+    await elapsed(waited.total_seconds())  # the exit waits at its first phase
+    locks.extend_gate.set()
+    await task
+
+    (line,) = log_lines.of("lock_release.ended", _LOGGER)
+    assert line["duration_ms"] < waited.total_seconds() * 1000
 
 
 async def test_a_cancellation_in_the_second_exit_phase_is_held_until_the_release_ends(
