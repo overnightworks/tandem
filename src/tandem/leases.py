@@ -186,12 +186,7 @@ class _LapseLines:
         )
 
     def handling_timer(self, due: Due) -> StepTimer:
-        return StepTimer(
-            "lapse_handling.ended",
-            logger,
-            lease_family=self._family,
-            holder_id=_lapse_of(due).holder,
-        )
+        return _lease_step_timer("lapse_handling.ended", self._family, _lapse_of(due).holder)
 
     def handler_failed(self, due: Due, error: Exception) -> None:
         logger.error(
@@ -221,6 +216,10 @@ class _LapseLines:
 
 def _lease_fields(family: str, holder: str) -> dict[str, str]:
     return {"lease_family": family, "holder_id": holder}
+
+
+def _lease_step_timer(event: str, family: str, holder: str) -> StepTimer:
+    return StepTimer(event, logger, **_lease_fields(family, holder))
 
 
 @dataclass
@@ -291,7 +290,7 @@ class Leases:
         a renewal that a reply lost under the client's `Retry` replayed still reads as the start it
         was.
         """
-        async with self._step_timer("lease_renewal.ended", holder):
+        async with _lease_step_timer("lease_renewal.ended", self._family, holder):
             return await self._renew_untimed(holder)
 
     async def _renew_untimed(self, holder: str) -> Renewal:
@@ -307,7 +306,7 @@ class Leases:
 
     async def end(self, holder: str, generation: str) -> bool:
         """End the live lease of `generation`, its lapse due now; else change nothing."""
-        async with self._step_timer("lease_end.ended", holder):
+        async with _lease_step_timer("lease_end.ended", self._family, holder):
             return await self._end_untimed(holder, generation)
 
     async def _end_untimed(self, holder: str, generation: str) -> bool:
@@ -360,7 +359,7 @@ class Leases:
         try:
             yield hold
         finally:
-            async with self._step_timer("lease_end.ended", holder):
+            async with _lease_step_timer("lease_end.ended", self._family, holder):
                 await _finished_despite_cancellation(
                     asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
                     _lease_fields(self._family, holder),
@@ -427,9 +426,6 @@ class Leases:
 
     async def _back_off(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
-
-    def _step_timer(self, event: str, holder: str) -> StepTimer:
-        return StepTimer(event, logger, lease_family=self._family, holder_id=holder)
 
     def _lease_state(self, reply: list[object]) -> LeaseState:
         liveness = _LIVENESS_OF_REPLY[cast(int, reply[0])]
