@@ -610,6 +610,29 @@ async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expir
     assert not log_lines.of("deadline_claim.expired", LOGGER)
 
 
+async def test_an_extension_that_fails_with_no_store_error_ends_the_loop_and_the_handler(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Spec: DEADLINE-22."""
+    deadlines = new_deadlines(make_client(redis_url), claim_for=CLAIM_FOR)
+    await deadlines.set("room-1", timedelta(0))
+
+    async def extension_that_breaks(due: Due) -> bool:
+        raise RuntimeError("the extension has a bug")
+
+    monkeypatch.setattr(deadlines, "extend", extension_that_breaks)
+    held = Handler[Due](hold=True)
+
+    async with serving(deadlines, held) as task:
+        await held.received()
+        failure = await ended(task)
+
+    assert isinstance(failure, RuntimeError)
+
+
 async def test_a_claim_that_runs_out_is_logged_without_its_key_or_token(
     redis_url: str,
     make_client: Callable[..., Redis],

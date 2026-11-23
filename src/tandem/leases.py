@@ -401,9 +401,9 @@ class Leases:
 
         Each `every` the expired leases are swept into the lapse queue and the due lapses are
         claimed in small batches until none is due. While `handle` runs its claim is extended every
-        `claim_for / 3`; an extension that fails stops, and `handle` keeps running. `done` follows a
-        `handle` that returns; one that raises is logged and its lapse returns when its claim runs
-        out. An outage or a refusal of Redis is ridden out with the back-off of the wake channel's
+        `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
+        exception from it ends the loop. `done` follows a `handle` that returns; one that raises is
+        logged and its lapse returns when its claim runs out. An outage or a refusal of Redis is ridden out with the back-off of the wake channel's
         following.
         """
 

@@ -211,10 +211,10 @@ class Deadlines(DeadlineQueue):
 
         Each `every`, `reconcile` runs when given, where a host arms its keys, and the due keys are
         claimed in small batches until none is due. While `handle` runs its claim is extended every
-        `claim_for / 3`; an extension that fails stops, and `handle` keeps running. `done` follows a
-        `handle` that returns; one that ends the claim itself (`recur`, `done`, `cancel`) leaves
-        that standing. One that raises is logged and its key returns when its claim runs out, unless
-        it ended the claim first. An outage or a refusal of Redis, from `reconcile`, a claim or a
+        `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
+        exception from it ends the loop. `done` follows a `handle` that returns; one that ends the
+        claim itself (`recur`, `done`, `cancel`) leaves that standing. One that raises is logged and
+        its key returns when its claim runs out, unless it ended the claim first. An outage or a refusal of Redis, from `reconcile`, a claim or a
         `done`, is ridden out with a back-off; any other exception from `reconcile` ends the loop.
         Cancelling the loop cancels the running `handle` and leaves its claim to run out.
         """
@@ -399,12 +399,20 @@ class _Serving:
     async def _handle_batch(self, batch: list[Due], tally: _RoundTally) -> None:
         pending = set(batch)
         extender = asyncio.create_task(self._extend_while_pending(pending))
+        handling = asyncio.create_task(self._handle_each(batch, pending, tally))
         try:
-            for due in batch:
-                await self._handle_one(due, pending, tally)
+            await asyncio.wait({extender, handling}, return_when=asyncio.FIRST_COMPLETED)
+            if extender.done():
+                extender.result()  # it only ends by raising: its failure ends the loop
+            await handling
         finally:
             extender.cancel()
-            await asyncio.gather(extender, return_exceptions=True)
+            handling.cancel()
+            await asyncio.gather(extender, handling, return_exceptions=True)
+
+    async def _handle_each(self, batch: list[Due], pending: set[Due], tally: _RoundTally) -> None:
+        for due in batch:
+            await self._handle_one(due, pending, tally)
 
     async def _handle_one(self, due: Due, pending: set[Due], tally: _RoundTally) -> None:
         tally.claimed += 1
