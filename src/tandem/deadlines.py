@@ -120,7 +120,7 @@ class DeadlineQueue:
     def __init__(self, redis: Client, keys: DeadlineKeys, claim_for: timedelta) -> None:
         self._redis = redis
         self._keys = keys
-        self._claim_for_ms = milliseconds(checked_span(claim_for, argument="claim_for"))
+        self._claim_for = checked_span(claim_for, argument="claim_for")
         self._set = Script(redis, _SET)
         self._arm = Script(redis, _ARM)
         self._recur = Script(redis, _RECUR)
@@ -128,6 +128,11 @@ class DeadlineQueue:
         self._claim_due = Script(redis, _CLAIM_DUE)
         self._extend = Script(redis, _EXTEND)
         self._done = Script(redis, _DONE)
+
+    @property
+    def claim_for(self) -> timedelta:
+        """How long a claim holds, which the serving loop reads for its extensions."""
+        return self._claim_for
 
     @property
     def keys(self) -> DeadlineKeys:
@@ -159,7 +164,9 @@ class DeadlineQueue:
         if limit < 1:
             raise ValueError(f"limit must be at least 1, got {limit!r}")
         tokens = [secrets.token_hex(_TOKEN_BYTES) for _ in range(limit)]
-        reply = await self._claim_due.run(self._key_names(), [limit, self._claim_for_ms, *tokens])
+        reply = await self._claim_due.run(
+            self._key_names(), [limit, milliseconds(self._claim_for), *tokens]
+        )
         pairs = [self._text(item) for item in cast(list[object], reply)]
         return [
             Due(key=key, claim=token) for key, token in zip(pairs[::2], pairs[1::2], strict=True)
@@ -167,7 +174,9 @@ class DeadlineQueue:
 
     async def extend(self, due: Due) -> bool:
         """Hold the claim for another `claim_for`; False once its token is gone or it expired."""
-        reply = await self._extend.run(self._key_names(), [due.key, due.claim, self._claim_for_ms])
+        reply = await self._extend.run(
+            self._key_names(), [due.key, due.claim, milliseconds(self._claim_for)]
+        )
         return reply == 1
 
     async def done(self, due: Due) -> bool:
@@ -190,7 +199,6 @@ class Deadlines(DeadlineQueue):
         """
         super().__init__(redis, deadline_keys(key_prefix, kind), claim_for)
         self._kind = kind
-        self._claim_for = claim_for
 
     async def serve_due(
         self,
@@ -213,7 +221,6 @@ class Deadlines(DeadlineQueue):
         await serve_queue(
             self,
             handle,
-            claim_for=self._claim_for,
             every=every,
             before_claim=reconcile,
             back_off=self._back_off,
@@ -312,7 +319,6 @@ async def serve_queue(
     queue: DeadlineQueue,
     handle: Callable[[Due], Awaitable[None]],
     *,
-    claim_for: timedelta,
     every: timedelta,
     before_claim: Callable[[], Awaitable[None]] | None,
     back_off: Callable[[float], Awaitable[None]],
@@ -326,7 +332,7 @@ async def serve_queue(
     is not `handle`'s ends the loop.
     """
     pause = checked_span(every, argument="every").total_seconds()
-    serving = _Serving(queue, handle, claim_for.total_seconds(), before_claim, lines)
+    serving = _Serving(queue, handle, before_claim, lines)
     backoff = BACKOFF_FIRST_SECONDS
     failed_runs = 0
     while True:
@@ -345,13 +351,12 @@ class _Serving:
         self,
         queue: DeadlineQueue,
         handle: Callable[[Due], Awaitable[None]],
-        claim_seconds: float,
         before_claim: Callable[[], Awaitable[None]] | None,
         lines: ServingLines,
     ) -> None:
         self._queue = queue
         self._handle = handle
-        self._claim_seconds = claim_seconds
+        self._claim_seconds = queue.claim_for.total_seconds()
         self._before_claim = before_claim
         self._lines = lines
 

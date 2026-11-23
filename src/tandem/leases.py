@@ -272,7 +272,6 @@ class Leases:
         self._redis = redis
         self._family = family
         self._lasts = checked_span(lasts, argument="lasts")
-        self._claim_for = checked_span(claim_for, argument="claim_for")
         self._keys = lease_keys(key_prefix, family)
         self._lasts_ms = milliseconds(lasts)
         self._lapses = DeadlineQueue(redis, self._keys.lapse, claim_for)
@@ -414,7 +413,6 @@ class Leases:
         await serve_queue(
             self._lapses,
             handle_due,
-            claim_for=self._claim_for,
             every=every,
             before_claim=self._sweep_expired,
             back_off=self._back_off,
