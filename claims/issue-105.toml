@@ -1,8 +1,0 @@
-claim_id = "59c8551ac1184d29b5b86c88ad4a2a63"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "3beddfceadadc85b9467846d90198e5f25e6d699"
-branch = "claude/issue-105-locks-keep-a-hold-alive-as-kept-keeps-a"
-scope = ["README.md", "docs/ARCHITECTURE.md", "docs/reference.md", "src/tandem/__init__.py", "src/tandem/deadlines.py", "src/tandem/leases.py", "src/tandem/locks.py", "tests/support/attempts.py", "tests/support/locks.py", "tests/test_locks_held.py"]
-opened_commit = "37ff27719a946cd83328ad65a7043eb1fb8575d9"
-whole_reason = "The keeper, its public error, its log events, the reference rows and duties that state them and the tests that pin them land together; any part alone leaves the contract or CI false."
