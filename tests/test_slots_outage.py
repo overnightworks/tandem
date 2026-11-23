@@ -20,12 +20,13 @@ OPERATIONS: list[Operation] = [
 async def test_a_cut_connection_raises_store_error_as_an_outage_and_a_refusal_as_no_outage(
     operation: Operation,
     proxy: TcpProxy,
+    proxied_client: Redis,
     url_denying: Callable[[str], Awaitable[str]],
     make_client: Callable[..., Redis],
     new_slots: Callable[..., Slots],
 ):
     """Spec: STORE-1."""
-    cut = new_slots(make_client(proxy.url, retry=Retry(NoBackoff(), 0)))
+    cut = new_slots(proxied_client)
     refused = new_slots(make_client(await url_denying("evalsha")))
     proxy.cut()
 

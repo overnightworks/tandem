@@ -16,10 +16,6 @@ from tests.support.waiting import until
 class Handled(Handler[Lapse]):
     """The lapses a `serve_lapses` handler received, and how it is held or released."""
 
-    @property
-    def lapses(self) -> list[Lapse]:
-        return self.items
-
 
 def serving(
     leases: Leases, handle: Callable[[Lapse], Awaitable[None]]

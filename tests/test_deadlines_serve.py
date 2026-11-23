@@ -9,6 +9,7 @@ from redis.asyncio import Redis
 from tandem import Deadlines, Due, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import deadline_keys
+from tests.support.attempts import Attempts, ObservedDeadlines
 from tests.support.backoffs import BackoffRecordingDeadlines, Backoffs
 from tests.support.deadlines import (
     SERVING_EVERY,
@@ -23,9 +24,11 @@ from tests.support.deadlines import (
 )
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
+from tests.support.store_failures import StoreFailure
 from tests.support.waiting import elapsed, until
 
 CLAIM_FOR = timedelta(milliseconds=300)
+LONG_CLAIM_FOR = timedelta(milliseconds=1500)  # a margin that a loaded machine cannot eat
 KIND = "work"
 LOGGER = "tandem.deadlines"
 _HOST_LOGGER = "host.handler"
@@ -40,6 +43,18 @@ def recording_deadlines(
     def build(client: Redis, backoffs: Backoffs) -> BackoffRecordingDeadlines:
         return BackoffRecordingDeadlines(
             client, key_prefix=key_prefix, kind=KIND, claim_for=CLAIM_FOR, backoffs=backoffs
+        )
+
+    return build
+
+
+@pytest.fixture
+def observed_deadlines(key_prefix: str, attempts: Attempts) -> Callable[..., ObservedDeadlines]:
+    """Deadlines over a client whose claims' attempts go to `attempts`."""
+
+    def build(client: Redis, *, claim_for: timedelta = CLAIM_FOR) -> ObservedDeadlines:
+        return ObservedDeadlines(
+            client, key_prefix=key_prefix, kind=KIND, claim_for=claim_for, attempts=attempts
         )
 
     return build
@@ -613,6 +628,33 @@ async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_
     assert (round_line["deadline_count"], round_line["failed_count"]) == (1, 0)
 
 
+async def test_a_handling_cancelled_by_the_loops_stop_says_nothing_of_a_claim_it_lost(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    key_prefix: str,
+    new_deadlines: Callable[..., Deadlines],
+    observed_deadlines: Callable[..., ObservedDeadlines],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-28, LOG-22."""
+    await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
+    held = Handler[Due](hold=True)
+
+    async with serving(
+        observed_deadlines(make_client(redis_url), claim_for=LONG_CLAIM_FOR), held
+    ) as task:
+        await held.received()
+        await observer.delete(deadline_keys(key_prefix, KIND).claim)
+        await attempts.until_unsuccessful()
+        task.cancel()
+        (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
+
+    assert line["outcome"] == Outcome.CANCELLED
+    assert "claim_kept" not in line
+
+
 async def test_a_cancelled_back_off_writes_no_line_beyond_the_failed_round_before_it(
     proxy: TcpProxy,
     deadlines_through_proxy: Callable[[Backoffs], BackoffRecordingDeadlines],
@@ -630,31 +672,105 @@ async def test_a_cancelled_back_off_writes_no_line_beyond_the_failed_round_befor
     ]
 
 
-async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expired(
-    proxy: TcpProxy,
-    deadlines_through_proxy: Callable[[Backoffs], BackoffRecordingDeadlines],
-    new_deadlines: Callable[..., Deadlines],
-    make_client: Callable[..., Redis],
+@pytest.mark.parametrize(
+    ("handled_after_the_claim_may_have_run_out", "level"),
+    [(True, "warning"), (False, "info")],
+    ids=["handle ends after the claim may have run out", "handle ends while the claim surely runs"],
+)
+async def test_a_failed_extension_marks_the_claim_not_kept_only_once_it_may_have_run_out(
+    handled_after_the_claim_may_have_run_out: bool,
+    level: str,
+    store_failure: StoreFailure,
     redis_url: str,
-    backoffs: Backoffs,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+    observed_deadlines: Callable[..., ObservedDeadlines],
+    attempts: Attempts,
     log_lines: LogLines,
 ):
-    """Spec: LOG-31, LOG-32, DEADLINE-22."""
+    """Spec: LOG-28, DEADLINE-22."""
     await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
     held = Handler[Due](hold=True)
 
-    async with serving(deadlines_through_proxy(backoffs), held):
+    async with serving(observed_deadlines(store_failure.client, claim_for=LONG_CLAIM_FOR), held):
         await held.received()
-        proxy.cut()
-        (line,) = await log_lines.await_of("deadline_claim_extension.failed", LOGGER)
-        await elapsed(2 * CLAIM_FOR.total_seconds())
+        await store_failure.begin()
+        await attempts.until_unsuccessful()
+        if handled_after_the_claim_may_have_run_out:
+            await elapsed(LONG_CLAIM_FOR.total_seconds())
+            assert attempts.unsuccessful_count == 1
         held.release()
+        (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
 
-    assert line["level"] == "warning"
-    assert line["reason"] == "outage"
-    assert line["error_type"] == StoreError.__name__
+    assert (line["level"], line["outcome"]) == (level, Outcome.OK)
     assert line["deadline_kind"] == KIND
-    assert not log_lines.of("deadline_claim.expired", LOGGER)
+    assert line.get("claim_kept") == (False if handled_after_the_claim_may_have_run_out else None)
+
+
+@pytest.mark.parametrize("raised", [None, RuntimeError], ids=["returning", "raising"])
+async def test_a_handling_whose_claim_was_deleted_says_claim_not_kept_whether_it_returns_or_raises(
+    raised: type[Exception] | None,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    observer: Redis,
+    key_prefix: str,
+    new_deadlines: Callable[..., Deadlines],
+    observed_deadlines: Callable[..., ObservedDeadlines],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-28, LOG-22."""
+    await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
+    held = Handler[Due](hold=True)
+
+    async def handle(due: Due) -> None:
+        await held(due)
+        if raised is not None:
+            raise raised("the handler fails")
+
+    async with serving(
+        observed_deadlines(make_client(redis_url), claim_for=LONG_CLAIM_FOR), handle
+    ):
+        (due,) = await held.received()
+        await observer.delete(deadline_keys(key_prefix, KIND).claim)
+        await attempts.until_unsuccessful()
+        await elapsed(LONG_CLAIM_FOR.total_seconds() / 2)  # 1.5 extension intervals
+        assert attempts.unsuccessful_count == 1
+        held.release()
+        (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
+
+    failed = raised is not None
+    expected = ("error", Outcome.FAILED) if failed else ("warning", Outcome.OK)
+    shown = (line["level"], line["outcome"])
+    assert shown == expected
+    assert line.get("error_type") == (raised.__name__ if raised else None)
+    assert line["claim_kept"] is False
+    assert line["deadline_kind"] == KIND
+    log_lines.assert_none_holds(due.key)
+    log_lines.assert_none_holds(due.claim)
+
+
+async def test_a_handling_whose_claim_was_extended_to_its_end_carries_no_claim_kept(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+    observed_deadlines: Callable[..., ObservedDeadlines],
+    attempts: Attempts,
+    log_lines: LogLines,
+):
+    """Spec: LOG-28."""
+    await new_deadlines(make_client(redis_url)).set("room-1", timedelta(0))
+    held = Handler[Due](hold=True)
+
+    async with serving(observed_deadlines(make_client(redis_url)), held):
+        await held.received()
+        await attempts.reached(2)
+        held.release()
+        (line,) = await log_lines.await_of("deadline_handling.ended", LOGGER)
+
+    assert attempts.results[:2] == [True, True]
+    assert (line["level"], line["outcome"]) == ("info", Outcome.OK)
+    assert "claim_kept" not in line
 
 
 async def test_an_extension_that_fails_with_no_store_error_ends_the_loop_and_the_handler(
@@ -678,28 +794,3 @@ async def test_an_extension_that_fails_with_no_store_error_ends_the_loop_and_the
         failure = await ended(task)
 
     assert isinstance(failure, RuntimeError)
-
-
-async def test_a_claim_that_runs_out_is_logged_without_its_key_or_token(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    observer: Redis,
-    new_deadlines: Callable[..., Deadlines],
-    key_prefix: str,
-    log_lines: LogLines,
-):
-    """Spec: LOG-32, DEADLINE-22."""
-    deadlines = new_deadlines(make_client(redis_url), claim_for=CLAIM_FOR)
-    await deadlines.set("room-1", timedelta(0))
-    held = Handler[Due](hold=True)
-
-    async with serving(deadlines, held):
-        (due,) = await held.received()
-        await observer.delete(deadline_keys(key_prefix, KIND).claim)
-        (line,) = await log_lines.await_of("deadline_claim.expired", LOGGER)
-        held.release()
-
-    assert line["level"] == "warning"
-    assert line["deadline_kind"] == KIND
-    log_lines.assert_none_holds(due.key)
-    log_lines.assert_none_holds(due.claim)

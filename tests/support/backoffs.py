@@ -43,23 +43,20 @@ class BackoffRecordingChannel(WakeChannel):
         await self._backoffs.record(seconds)
 
 
-class BackoffRecordingLeases(Leases):
+class _BackoffRecording:
+    """What `Leases` and `Deadlines` share to record the waits after a failed round."""
+
+    def __init__(self, *args: Any, backoffs: Backoffs, **keywords: Any) -> None:
+        super().__init__(*args, **keywords)
+        self._backoffs = backoffs
+
+    async def _back_off(self, seconds: float) -> None:
+        await self._backoffs.record(seconds)
+
+
+class BackoffRecordingLeases(_BackoffRecording, Leases):
     """`Leases` whose waits after a failed round go to `backoffs`."""
 
-    def __init__(self, *args: Any, backoffs: Backoffs, **keywords: Any) -> None:
-        super().__init__(*args, **keywords)
-        self._backoffs = backoffs
 
-    async def _back_off(self, seconds: float) -> None:
-        await self._backoffs.record(seconds)
-
-
-class BackoffRecordingDeadlines(Deadlines):
+class BackoffRecordingDeadlines(_BackoffRecording, Deadlines):
     """`Deadlines` whose waits after a failed round go to `backoffs`."""
-
-    def __init__(self, *args: Any, backoffs: Backoffs, **keywords: Any) -> None:
-        super().__init__(*args, **keywords)
-        self._backoffs = backoffs
-
-    async def _back_off(self, seconds: float) -> None:
-        await self._backoffs.record(seconds)

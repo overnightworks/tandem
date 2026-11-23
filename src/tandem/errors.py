@@ -12,8 +12,8 @@ BACKOFF_CAP_SECONDS = 5.0
 class StoreError(Exception):
     """Redis refused a command or did not answer in time; the cause is chained.
 
-    `outage` tells a lost connection or a timeout, which a later attempt can survive, from a
-    refusal (rejected credentials, a missing right, an error reply), which it cannot.
+    `outage` tells a lost connection or a timeout from a refusal (rejected credentials, a missing
+    right, an error reply). Both can heal, so the serving loops and the keepers ride either out.
     """
 
     def __init__(self, message: str, *, outage: bool = False) -> None:
