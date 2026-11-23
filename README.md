@@ -37,7 +37,7 @@ from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError, TimeoutError
 
-from tandem import Deadlines, Leases, Locks, Slots, StoreError, Wake, WakeChannel
+from tandem import Deadlines, Due, Leases, Locks, Slots, StoreError, Wake, WakeChannel
 
 # Retry and timeouts: duty 1 of the reference.
 redis = Redis.from_url(
@@ -78,9 +78,12 @@ deadlines = Deadlines(redis, key_prefix="skat", kind="seats", claim_for=timedelt
 
 
 async def expire_seats(served: Served) -> None:
-    for due in await deadlines.claim_due(limit=20):
+    async def expire(due: Due) -> None:
         await served.expire(seat=due.key, fence=due.claim)  # the host fences its own effect
-        await deadlines.done(due)
+
+    # Runs until cancelled: it claims each due key, keeps its claim while `expire` runs, finishes it
+    # and rides out Redis outages.
+    await deadlines.serve_due(expire, every=timedelta(seconds=5))
 
 
 leases = Leases(
@@ -152,7 +155,7 @@ and the ruling is recorded in this section; the process is marketplace's
   all and the host reconciles; a lost lease or lock reads UNKNOWN, not GONE or free, for `lasts`, and a first
   `acquire` of an app with no epoch yet returns None for `lasts`. What this needs of Redis is stated in the
   [architecture](docs/ARCHITECTURE.md#6-constraints-and-reasons). A step of Redis's clock moves every expiry.
-- A lapse whose handler always raises returns to a worker every `claim_for`; a family without
+- A lapse or a due key whose handler always raises returns to a worker every `claim_for`; a family without
   `serve_lapses` keeps its lapse queue until the next restart.
 - A paused holder lapses after `lasts`; its stale effects are refused only by the host's own fence.
 - A lock has no forced release and no holder label: its host keeps who holds it in its own store.
