@@ -1,0 +1,8 @@
+claim_id = "4fec264538fd439fac37f2986a82101b"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
+role = "builder"
+base = "7f5bb4529a3ff440a2772be880dd5c124c6abae6"
+branch = "claude/issue-106-background-failure-lines-follow-logline"
+scope = ["docs/ARCHITECTURE.md", "docs/reference.md", "src/tandem/deadlines.py", "src/tandem/errors.py", "src/tandem/leases.py", "tests/support/backoffs.py", "tests/support/leases.py", "tests/test_deadlines_serve.py", "tests/test_leases_kept.py", "tests/test_leases_serve.py", "tests/test_slots_outage.py"]
+opened_commit = "441be579660935d356a9aeb1bccd4b2e1b62f3ae"
+whole_reason = "The renamed and folded log lines, the reference rows that state them and the tests that pin them land together, any part alone leaving the public log contract or CI false; #104's follow-ups ride along because this lane is next in their files."
