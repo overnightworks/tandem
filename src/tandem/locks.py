@@ -282,26 +282,30 @@ class Locks:
         """The exit's two phases, which a cancellation holds until both end: the keeper's last
         extension, untimed, then the release unless the lock was lost, which writes no release
         line and whose line is timed from its start."""
-        cancelled: asyncio.CancelledError | None = None
         try:
             await finished_despite_cancellation(keeper, self._log_release_failed)
-        except asyncio.CancelledError as cancellation:
-            cancelled = cancellation
-        if not keeping.lost:
-            try:
-                async with self._step("lock_release.ended"):
-                    await finished_despite_cancellation(
-                        asyncio.create_task(self._release_untimed(name, generation)),
-                        self._log_release_failed,
-                    )
-            except asyncio.CancelledError as cancellation:
-                cancelled = cancellation
-            except Exception as failure:
-                if cancelled is None:
-                    raise
-                self._log_release_failed(failure)
-        if cancelled is not None:
-            raise cancelled
+        except asyncio.CancelledError:
+            await self._release_unless_lost(keeping, name, generation, failure_is_hidden=True)
+            raise
+        await self._release_unless_lost(keeping, name, generation, failure_is_hidden=False)
+
+    async def _release_unless_lost(
+        self, keeping: _Keeping, name: str, generation: str, *, failure_is_hidden: bool
+    ) -> None:
+        """The exit's second phase. A cancellation of the first phase hides a failed release: the
+        failure is then logged once as `lock_release.failed`."""
+        if keeping.lost:
+            return
+        try:
+            async with self._step("lock_release.ended"):
+                await finished_despite_cancellation(
+                    asyncio.create_task(self._release_untimed(name, generation)),
+                    self._log_release_failed,
+                )
+        except Exception as failure:
+            if not failure_is_hidden:
+                raise
+            self._log_release_failed(failure)
 
     def _log_release_failed(self, failure: BaseException) -> None:
         logger.error(
