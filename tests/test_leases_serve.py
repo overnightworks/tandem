@@ -1,11 +1,12 @@
 import asyncio
+import logging
 import signal
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import timedelta
 
 import pytest
-from logline import Outcome
+from logline import Outcome, StepTimer
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import NoBackoff
@@ -25,10 +26,29 @@ from tests.support.leases import (
 )
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
-from tests.support.waiting import until, within
+from tests.support.waiting import elapsed, until, within
 
 LASTS = timedelta(milliseconds=300)
 CLAIM_FOR = timedelta(milliseconds=300)
+
+
+@pytest.fixture
+def leases_through_proxy(
+    proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str
+) -> Callable[[Backoffs], BackoffRecordingLeases]:
+    """Leases through the proxy whose back-offs go to `backoffs` and whose client never retries."""
+
+    def build(backoffs: Backoffs) -> BackoffRecordingLeases:
+        return BackoffRecordingLeases(
+            make_client(proxy.url, retry=Retry(NoBackoff(), 0)),
+            key_prefix=key_prefix,
+            family="owner",
+            lasts=LASTS,
+            claim_for=CLAIM_FOR,
+            backoffs=backoffs,
+        )
+
+    return build
 
 
 async def _process_line(process: asyncio.subprocess.Process) -> str:
@@ -103,22 +123,14 @@ async def test_a_handler_that_runs_past_claim_for_keeps_its_lapse_from_others_an
 
 async def test_a_connection_drop_is_ridden_out_with_back_off_and_a_raising_handler_leaves_the_loop(
     proxy: TcpProxy,
+    leases_through_proxy: Callable[[Backoffs], BackoffRecordingLeases],
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
-    key_prefix: str,
     backoffs: Backoffs,
 ):
     """Spec: LEASE-18, LEASE-20."""
-    through_proxy = make_client(proxy.url, retry=Retry(NoBackoff(), 0))
-    serving_leases = BackoffRecordingLeases(
-        through_proxy,
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=CLAIM_FOR,
-        backoffs=backoffs,
-    )
+    serving_leases = leases_through_proxy(backoffs)
     renewer = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     attempts: list[str] = []
 
@@ -275,6 +287,7 @@ async def test_a_claim_that_cannot_be_extended_for_an_outage_leaves_the_handler_
 
 
 _LOGGER = "tandem.leases"
+_HOST_LOGGER = "host.handler"
 
 
 @pytest.mark.parametrize(
@@ -307,7 +320,7 @@ async def test_a_lapse_handling_writes_one_line_with_its_outcome(
     assert line["holder_id"] == "pod-a"
     assert line["duration_ms"] >= 0
     assert line.get("error_type") == (raised.__name__ if raised else None)
-    assert ("Traceback" in line.get("exception", "")) == (raised is not None)
+    assert "exception" not in line
 
 
 def _store_error_raised_directly() -> Exception:
@@ -346,7 +359,7 @@ def _host_error_raised_from_another() -> Exception:
         (_host_error_raised_from_another, ValueError, True),
     ],
 )
-async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is_in_it(
+async def test_a_failed_handler_writes_its_traceback_on_its_own_line_unless_a_store_error_is_in_it(
     failure: Callable[[], Exception],
     error_type: type[Exception],
     writes_traceback: bool,
@@ -355,7 +368,7 @@ async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
-    """Spec: LOG-10."""
+    """Spec: LOG-10, LOG-25."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
 
@@ -363,65 +376,85 @@ async def test_a_failed_lapse_handler_writes_a_traceback_unless_a_store_error_is
         raise failure()
 
     async with serving(leases, handle):
-        (line, *_) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+        await log_lines.await_of("lapse_handling.ended", _LOGGER)
 
-    assert line["level"] == "error"
-    assert line["outcome"] == Outcome.FAILED
-    assert line["error_type"] == error_type.__name__
-    assert ("exception" in line) is writes_traceback
+    # Both lines are written without a suspension between them, so one snapshot holds both.
+    handling = log_lines.of("lapse_handling.ended", _LOGGER)
+    tracebacks = log_lines.of("lapse_handler.failed", _LOGGER)
+    assert {line["error_type"] for line in handling} == {error_type.__name__}
+    assert not [line for line in handling if "exception" in line]
+    assert len(tracebacks) == (len(handling) if writes_traceback else 0)
+    for line in tracebacks:
+        assert line["level"] == "error"
+        assert line["error_type"] == error_type.__name__
+        assert (line["lease_family"], line["holder_id"]) == ("owner", "pod-a")
+        assert "Traceback" in line["exception"]
     log_lines.assert_none_holds("a refusal naming the store")
 
 
-async def test_each_lapse_handling_runs_under_its_own_trace_that_ends_with_it(
+async def test_each_lapse_handling_has_its_own_trace_and_the_steps_of_its_handler_hang_under_it(
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
-    """Spec: LEASE-19."""
-    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
-    await leases.renew("pod-a")
-    await leases.renew("pod-b")
-    handled = Handled()
-
-    async with serving(leases, handled):
-        handling = await log_lines.await_of("lapse_handling.ended", _LOGGER, count=2)
-        rounds = await log_lines.await_of("lapse_round.ended", _LOGGER, count=2)
-
-    assert len({line["trace_id"] for line in handling}) == len(handling)
-    assert all(line["trace_id"] is not None for line in handling)
-    assert all(line["trace_id"] is None for line in rounds)
-
-
-async def test_a_round_writes_its_counts_at_info_with_work_and_at_debug_without(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    new_leases: Callable[..., Leases],
-    log_lines: LogLines,
-):
-    """Spec: LOG-11."""
+    """Spec: LEASE-19, LOG-27."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
     await leases.renew("pod-b")
 
     async def handle(lapse: Lapse) -> None:
-        if lapse.holder == "pod-a":
-            raise ValueError("the handler fails")
-
-    async def a_round_worked() -> bool:
-        return any(line["lapse_count"] for line in log_lines.of("lapse_round.ended", _LOGGER))
+        async with StepTimer(
+            "host_call.ended", logging.getLogger(_HOST_LOGGER), holder_id=lapse.holder
+        ):
+            pass
 
     async with serving(leases, handle):
-        await until(a_round_worked)
+        handling = await log_lines.await_of("lapse_handling.ended", _LOGGER, count=2)
+        rounds = await log_lines.await_of("lapse_round.ended", _LOGGER)
+
+    steps = log_lines.of("host_call.ended", _HOST_LOGGER)
+    handling_traces = {line["trace_id"] for line in handling}
+    assert None not in handling_traces
+    assert len(handling_traces) == len(handling)
+    assert handling_traces.isdisjoint(line["trace_id"] for line in rounds)
+    assert None not in {line["trace_id"] for line in rounds}
+    for line in handling:
+        (step,) = [step for step in steps if step["holder_id"] == line["holder_id"]]
+        assert step["trace_id"] == line["trace_id"]
+        assert step.get("parent_span_id") == line.get("span_id")
+
+
+@pytest.mark.parametrize(("raised", "failed_count"), [(None, 0), (ValueError, 1)])
+async def test_a_round_claiming_no_lapse_writes_no_line_and_one_that_did_writes_its_counts(
+    raised: type[Exception] | None,
+    failed_count: int,
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    log_lines: LogLines,
+):
+    """Spec: LOG-11, LOG-26."""
+    leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+
+    async def handle(lapse: Lapse) -> None:
+        if raised is not None:
+            raise raised("the handler fails")
+
+    async with serving(leases, handle):
+        await elapsed(5 * SERVING_EVERY.total_seconds())
+        assert not log_lines.of("lapse_round.ended", _LOGGER)
+        await leases.renew("pod-a")
+        await log_lines.await_of("lapse_round.ended", _LOGGER)
 
     rounds = log_lines.of("lapse_round.ended", _LOGGER)
-    worked = [line for line in rounds if line["lapse_count"] > 0]
-    idle = [line for line in rounds if line["lapse_count"] == 0]
-    assert idle
-    assert {(line["level"], line["failed_count"]) for line in idle} == {("debug", 0)}
-    assert worked[0]["level"] == "info"
-    assert (worked[0]["lapse_count"], worked[0]["failed_count"]) == (2, 1)
-    assert all(line["outcome"] == Outcome.OK and line["duration_ms"] >= 0 for line in rounds)
+    first = rounds[0]
+    assert (first["level"], first["outcome"]) == ("info", Outcome.OK)
+    assert (first["lapse_count"], first["failed_count"]) == (1, failed_count)
+    assert first["lease_family"] == "owner"
+    assert first["duration_ms"] >= 0
+    assert all(line["lapse_count"] > 0 for line in rounds)
+    assert not [line for line in rounds if "failed_run_count" in line]
 
 
 async def test_an_extension_the_acl_refuses_is_logged_with_its_reason(
@@ -478,13 +511,7 @@ async def test_an_extension_lost_to_an_outage_is_logged_but_never_declared_expir
         await running.received()
         proxy.cut()
         (line,) = await log_lines.await_of("lapse_claim_extension.failed", _LOGGER)
-        loop = asyncio.get_running_loop()
-        claim_over_at = loop.time() + 2 * CLAIM_FOR.total_seconds()
-
-        async def claim_is_over() -> bool:
-            return loop.time() >= claim_over_at
-
-        await until(claim_is_over)
+        await elapsed(2 * CLAIM_FOR.total_seconds())
         running.release()
 
     assert line["reason"] == "outage"
@@ -516,56 +543,145 @@ async def test_a_claim_that_runs_out_is_logged_without_its_generation(
     log_lines.assert_none_holds(lapse.generation)
 
 
-async def test_an_outage_is_logged_per_failed_round_and_a_refusal_writes_no_line(
+async def test_a_whole_outage_writes_one_failed_line_and_one_recovery_counting_its_failed_rounds(
     proxy: TcpProxy,
-    url_denying: Callable[[str], Awaitable[str]],
-    observer: Redis,
-    make_client: Callable[..., Redis],
-    key_prefix: str,
+    leases_through_proxy: Callable[[Backoffs], BackoffRecordingLeases],
     backoffs: Backoffs,
     log_lines: LogLines,
 ):
-    """Spec: LOG-11, LOG-20, LEASE-20."""
-    await url_denying("flushall")
-    through_proxy = make_client(
-        proxy.url.replace("redis://", f"redis://{key_prefix}@"), retry=Retry(NoBackoff(), 0)
-    )
-    leases = BackoffRecordingLeases(
-        through_proxy,
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=CLAIM_FOR,
-        backoffs=backoffs,
-    )
-    task = asyncio.create_task(leases.serve_lapses(Handled(), every=SERVING_EVERY))
-    try:
-        proxy.cut()
-        await backoffs.reached(2)
+    """Spec: LOG-11, LOG-26."""
+    proxy.cut()
+
+    async with serving(leases_through_proxy(backoffs), Handled()):
+        await backoffs.reached(3)
         proxy.restore()
-        await log_lines.await_of("lapse_round.ended", _LOGGER, count=1)
+        failure, recovery = await log_lines.await_of("lapse_round.ended", _LOGGER, count=2)
 
-        async def recovered() -> bool:
-            rounds = log_lines.of("lapse_round.ended", _LOGGER)
-            return bool(rounds) and rounds[-1]["outcome"] == Outcome.OK
+    assert (failure["level"], failure["outcome"], failure["reason"]) == (
+        "warning",
+        Outcome.FAILED,
+        "outage",
+    )
+    assert (failure["lapse_count"], failure["failed_count"]) == (0, 0)
+    assert "failed_run_count" not in failure
+    assert (recovery["level"], recovery["outcome"]) == ("info", Outcome.OK)
+    assert recovery["failed_run_count"] == len(backoffs.delays)
+    assert len(log_lines.of("lapse_round.ended", _LOGGER)) == 2
 
-        await until(recovered)
-        written = len(log_lines.of_logger(_LOGGER))
-        await observer.acl_setuser(key_prefix, enabled=True, commands=["-evalsha"])
-        assert isinstance(await ended(task), StoreError)
-    finally:
-        task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+
+@pytest.mark.parametrize(
+    ("earlier_failure", "failed_lapse_counts"),
+    [(False, [1]), (True, [0])],
+    ids=["first failure of the run", "later failure of the run"],
+)
+async def test_a_round_held_through_an_outage_writes_its_failed_line_only_as_the_first_of_the_run(
+    earlier_failure: bool,
+    failed_lapse_counts: list[int],
+    proxy: TcpProxy,
+    leases_through_proxy: Callable[[Backoffs], BackoffRecordingLeases],
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    backoffs: Backoffs,
+    log_lines: LogLines,
+):
+    """Spec: LOG-11, LOG-26."""
+    renewer = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
+    running = Handled(hold=True)
+    if earlier_failure:
+        proxy.cut()
+
+    async with serving(leases_through_proxy(backoffs), running):
+        if earlier_failure:
+            await backoffs.reached(1)
+        await renewer.renew("pod-a")
+        if earlier_failure:
+            await until_gone(renewer, "pod-a")
+            proxy.restore()
+        await running.received()
+        proxy.cut()
+        recorded = len(backoffs.delays)
+        running.release()
+        await backoffs.reached(recorded + 1)
 
     failed = [
         line
         for line in log_lines.of("lapse_round.ended", _LOGGER)
         if line["outcome"] == Outcome.FAILED
     ]
-    assert len(failed) >= 2
-    assert {(line["level"], line["lapse_count"]) for line in failed} == {("warning", 0)}
-    refusal_period = log_lines.of_logger(_LOGGER)[written:]
-    assert not [line for line in refusal_period if line["level"] in ("warning", "error")]
+    assert [line["lapse_count"] for line in failed] == failed_lapse_counts
+    assert {(line["level"], line["reason"]) for line in failed} == {("warning", "outage")}
+
+
+@pytest.mark.parametrize(
+    ("denied_from_start", "denied_while_handling"),
+    [("evalsha", None), ("hset", None), ("flushall", "zrem")],
+    ids=["at the sweep", "at the first claim", "after the first claim"],
+)
+async def test_a_refusal_ends_serve_lapses_without_a_round_line_or_a_warning(
+    denied_from_start: str,
+    denied_while_handling: str | None,
+    url_denying: Callable[[str], Awaitable[str]],
+    redis_url: str,
+    observer: Redis,
+    make_client: Callable[..., Redis],
+    new_leases: Callable[..., Leases],
+    key_prefix: str,
+    log_lines: LogLines,
+):
+    """Spec: LOG-20, LEASE-20."""
+    leases = new_leases(
+        make_client(await url_denying(denied_from_start)), lasts=LASTS, claim_for=CLAIM_FOR
+    )
+    await new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR).renew("pod-a")
+    running = Handled(hold=True)
+
+    async with serving(leases, running) as task:
+        if denied_while_handling is not None:
+            await running.received()
+            await observer.acl_setuser(
+                key_prefix, enabled=True, commands=[f"-{denied_while_handling}"]
+            )
+            running.release()
+        refusal = await ended(task)
+
+    assert isinstance(refusal, StoreError)
+    assert not log_lines.of("lapse_round.ended", _LOGGER)
+    assert not [
+        line for line in log_lines.of_logger(_LOGGER) if line["level"] in ("warning", "error")
+    ]
+
+
+async def test_a_round_cancelled_before_it_claimed_a_lapse_writes_no_line(
+    proxy: TcpProxy,
+    leases_through_proxy: Callable[[Backoffs], BackoffRecordingLeases],
+    backoffs: Backoffs,
+    log_lines: LogLines,
+):
+    """Spec: LOG-11, LOG-26."""
+    proxy.hold()
+
+    async with serving(leases_through_proxy(backoffs), Handled()):
+        await elapsed(3 * SERVING_EVERY.total_seconds())
+
+    assert not log_lines.of_logger(_LOGGER)
+
+
+async def test_a_cancelled_back_off_writes_no_line_beyond_the_failed_round_before_it(
+    proxy: TcpProxy,
+    leases_through_proxy: Callable[[Backoffs], BackoffRecordingLeases],
+    held_backoffs: Backoffs,
+    log_lines: LogLines,
+):
+    """Spec: LOG-11, LOG-26."""
+    proxy.cut()
+
+    async with serving(leases_through_proxy(held_backoffs), Handled()):
+        await held_backoffs.reached(1)
+
+    assert [line["outcome"] for line in log_lines.of("lapse_round.ended", _LOGGER)] == [
+        Outcome.FAILED
+    ]
 
 
 async def test_serve_lapses_takes_no_claimer_argument(
@@ -577,13 +693,13 @@ async def test_serve_lapses_takes_no_claimer_argument(
         leases.serve_lapses(Handled(), every=SERVING_EVERY, claimer="pod-1")  # pyright: ignore[reportCallIssue]
 
 
-async def test_a_handler_that_is_cancelled_writes_its_line_with_the_cancelled_outcome(
+async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_cancelled(
     redis_url: str,
     make_client: Callable[..., Redis],
     new_leases: Callable[..., Leases],
     log_lines: LogLines,
 ):
-    """Spec: LOG-10, LOG-18."""
+    """Spec: LOG-10, LOG-11, LOG-18."""
     leases = new_leases(make_client(redis_url), lasts=LASTS, claim_for=CLAIM_FOR)
     await leases.renew("pod-a")
     running = Handled(hold=True)
@@ -592,9 +708,12 @@ async def test_a_handler_that_is_cancelled_writes_its_line_with_the_cancelled_ou
         await running.received()
         task.cancel()
         (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
+        (round_line,) = await log_lines.await_of("lapse_round.ended", _LOGGER)
 
     assert line["outcome"] == Outcome.CANCELLED
     assert line["holder_id"] == "pod-a"
+    assert (round_line["level"], round_line["outcome"]) == ("info", Outcome.CANCELLED)
+    assert (round_line["lapse_count"], round_line["failed_count"]) == (1, 0)
 
 
 async def test_a_lapse_that_reaches_two_handlers_writes_a_line_for_each(

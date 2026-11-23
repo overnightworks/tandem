@@ -19,3 +19,14 @@ async def until(condition: Callable[[], Awaitable[bool]], bound: float = BOUND_S
     async with asyncio.timeout(bound):
         while not await condition():
             await asyncio.sleep(_POLL_SECONDS)
+
+
+async def elapsed(seconds: float) -> None:
+    """Wait until `seconds` have passed on the loop clock, for a stimulus that is time itself."""
+    loop = asyncio.get_running_loop()
+    over_at = loop.time() + seconds
+
+    async def over() -> bool:
+        return loop.time() >= over_at
+
+    await until(over)
