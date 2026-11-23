@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import functools
 import logging
 import secrets
 from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
@@ -14,8 +15,15 @@ from typing import NoReturn, cast
 from logline import StepTimer
 
 from tandem.client import Client
-from tandem.deadlines import DeadlineQueue, Due, checked_span, milliseconds, serve_queue
-from tandem.errors import StoreError, failure_reason
+from tandem.deadlines import (
+    DeadlineQueue,
+    Due,
+    checked_every,
+    checked_span,
+    milliseconds,
+    repeat_until_stopped,
+    serve_queue,
+)
 from tandem.keys import lease_keys
 from tandem.script import Script
 
@@ -213,14 +221,15 @@ class Hold:
     generation: str
 
 
-async def _finished_despite_cancellation(
-    cleanup: asyncio.Task[None], lease_fields: dict[str, str]
+async def finished_despite_cancellation(
+    cleanup: asyncio.Task[object], on_failed: Callable[[BaseException], None]
 ) -> None:
     """Wait for `cleanup` however often the caller is cancelled, then propagate the cancellation.
 
     A shield alone raises in the cancelled caller at once, lets `cleanup` outlive it and logs a
-    later failure of `cleanup` itself. A failure of `cleanup` after a cancellation is logged once
-    and never replaces the cancellation; a cancelled `cleanup` is no failure.
+    later failure of `cleanup` itself. A failure of `cleanup` after a cancellation goes once to
+    `on_failed`, which writes the caller's own line, and never replaces the cancellation; a
+    cancelled `cleanup` is no failure.
     """
     try:
         await asyncio.wait((cleanup,))
@@ -230,9 +239,7 @@ async def _finished_despite_cancellation(
                 await asyncio.wait((cleanup,))
         failure = None if cleanup.cancelled() else cleanup.exception()
         if failure is not None:
-            logger.error(
-                "lease_end.failed", extra={"error_type": type(failure).__name__, **lease_fields}
-            )
+            on_failed(failure)
         raise
     cleanup.result()
 
@@ -329,9 +336,7 @@ class Leases:
         at info, with `failed_run_count`. At exit an in-flight renewal completes, then the current
         generation ends, even when the exit is cancelled; the cancellation then propagates.
         """
-        if checked_span(every, argument="every") >= self._lasts:
-            raise ValueError(f"every must be below lasts ({self._lasts}), got {every!r}")
-        return self._kept(holder, every)
+        return self._kept(holder, checked_every(every, self._lasts))
 
     @contextlib.asynccontextmanager
     async def _kept(self, holder: str, every: timedelta) -> AsyncIterator[Hold]:
@@ -344,9 +349,9 @@ class Leases:
             yield hold
         finally:
             async with _lease_step_timer("lease_end.ended", self._family, holder):
-                await _finished_despite_cancellation(
+                await finished_despite_cancellation(
                     asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
-                    _lease_fields(self._family, holder),
+                    functools.partial(self._log_end_failed, holder),
                 )
 
     async def _finish(
@@ -356,29 +361,25 @@ class Leases:
         await renewer
         await self._end_untimed(holder, hold.generation)
 
+    def _log_end_failed(self, holder: str, failure: BaseException) -> None:
+        logger.error(
+            "lease_end.failed",
+            extra={"error_type": type(failure).__name__, **_lease_fields(self._family, holder)},
+        )
+
     async def _renew_until(
         self, stopping: asyncio.Event, holder: str, every_seconds: float, hold: Hold
     ) -> None:
-        failed_run_count = 0
-        while True:
-            with contextlib.suppress(TimeoutError):
-                await asyncio.wait_for(stopping.wait(), every_seconds)
-            if stopping.is_set():
-                return
-            attempt = _lease_step_timer("lease_keeping.ended", self._family, holder)
-            try:
-                hold.generation = (await self._renew_untimed(holder)).generation
-            except StoreError as error:
-                failed_run_count += 1
-                if failed_run_count == 1:
-                    attempt.handled()
-                    attempt.fail(failure_reason(error))
-                    attempt.end()
-                continue
-            if failed_run_count:
-                attempt.add(failed_run_count=failed_run_count)
-                attempt.end()
-                failed_run_count = 0
+        async def renew() -> bool:
+            hold.generation = (await self._renew_untimed(holder)).generation
+            return True
+
+        await repeat_until_stopped(
+            stopping,
+            every_seconds,
+            renew,
+            lambda: _lease_step_timer("lease_keeping.ended", self._family, holder),
+        )
 
     async def serve_lapses(
         self,

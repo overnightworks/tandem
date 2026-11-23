@@ -103,11 +103,10 @@ async def train_on_gpu(job: Job) -> None:
     generation = await locks.acquire("gpu-0")
     if generation is None:
         return  # held by someone else, or Redis restarted less than `lasts` ago
-    try:
-        while not job.done() and await locks.extend("gpu-0", generation):
+    # Extends every 5 s and releases at exit; a lost lock cancels the block and raises LockLost.
+    async with locks.held("gpu-0", generation, every=timedelta(seconds=5)):
+        while not job.done():
             await job.step(fence=generation)  # a stale generation is refused by the job's own fence
-    finally:
-        await locks.release("gpu-0", generation)
 
 
 slots = Slots(redis, key_prefix="skat", family="streams", lasts=timedelta(seconds=60))

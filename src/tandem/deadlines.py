@@ -1,6 +1,7 @@
 """Deadlines: keys that come due on Redis TIME and reach one claimer at a time."""
 
 import asyncio
+import contextlib
 import logging
 import math
 import secrets
@@ -307,6 +308,74 @@ class _RoundTally:
             timer.end()
 
 
+class FailedRuns:
+    """The failed runs just before now of one repeating background run, and the lines it owes.
+
+    logline's background-run row: a failing repeating run writes its first failure and its
+    recovery, with `failed_run_count`, and nothing in between. Every background loop of tandem
+    decides it here.
+    """
+
+    def __init__(self) -> None:
+        self._count = 0
+
+    @property
+    def failing(self) -> bool:
+        return self._count > 0
+
+    def fail(self, timer: StepTimer, error: StoreError) -> bool:
+        """Count a failed run; True when it is the first of its run, and `timer` then says why."""
+        self._count += 1
+        if self._count > 1:
+            return False
+        timer.handled()
+        timer.fail(failure_reason(error))
+        return True
+
+    def recover(self, timer: StepTimer) -> bool:
+        """End the run of failures after a run that worked; True when one was failing, and
+        `timer` then counts it."""
+        if not self._count:
+            return False
+        timer.add(failed_run_count=self._count)
+        self._count = 0
+        return True
+
+
+async def paused_until_stopped(stopping: asyncio.Event, seconds: float) -> bool:
+    """Wait `seconds` or until `stopping` is set; True when it is set."""
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(stopping.wait(), seconds)
+    return stopping.is_set()
+
+
+async def repeat_until_stopped(
+    stopping: asyncio.Event,
+    every_seconds: float,
+    attempt: Callable[[], Awaitable[bool]],
+    new_timer: Callable[[], StepTimer],
+) -> None:
+    """Run `attempt` every `every_seconds` until `stopping` is set or an attempt returns False.
+
+    A `StoreError` from an attempt, an outage or a refusal, is retried after the pause. `new_timer`
+    makes the timer of one attempt; its line is written only for the first failure of a run and
+    for the recovery after it.
+    """
+    failed_runs = FailedRuns()
+    while not await paused_until_stopped(stopping, every_seconds):
+        timer = new_timer()
+        try:
+            carry_on = await attempt()
+        except StoreError as error:
+            if failed_runs.fail(timer, error):
+                timer.end()
+            continue
+        if failed_runs.recover(timer):
+            timer.end()
+        if not carry_on:
+            return
+
+
 def _store_error_in(failure: BaseException) -> StoreError | None:
     """The `StoreError`, which names Redis, that `failure` is or chains or groups; else None."""
     unvisited, visited = [failure], set[int]()
@@ -343,14 +412,11 @@ async def serve_queue(
     pause = checked_span(every, argument="every").total_seconds()
     serving = _Serving(queue, handle, before_claim, lines, due_fields)
     backoff = BACKOFF_FIRST_SECONDS
-    failed_runs = 0
     while True:
-        if await serving.round(failed_runs):
-            failed_runs += 1
+        if await serving.round():
             await back_off(backoff)
             backoff = next_backoff(backoff)
             continue
-        failed_runs = 0
         backoff = BACKOFF_FIRST_SECONDS
         await asyncio.sleep(pause)
 
@@ -370,12 +436,13 @@ class _Serving:
         self._before_claim = before_claim
         self._lines = lines
         self._due_fields = due_fields
+        self._failed_runs = FailedRuns()
 
-    async def round(self, failed_runs: int) -> bool:
+    async def round(self) -> bool:
         """One round in a trace of its own; True when it failed on Redis.
 
         It writes a line when it claimed a key, when it is the first failed round of a run and when
-        it ends such a run; `failed_runs` is the number of failed rounds just before it.
+        it ends such a run.
         """
         timer = self._lines.round_timer()
         tally = _RoundTally()
@@ -384,7 +451,7 @@ class _Serving:
                 if self._before_claim is not None:
                     await self._before_claim()
                 claims = await self._claim_batch()
-                if not claims and not failed_runs:
+                if not claims and not self._failed_runs.failing:
                     return False
                 while claims:
                     await self._handle_batch(claims, tally)
@@ -393,17 +460,14 @@ class _Serving:
                 store_error = _store_error_in(error)
                 if store_error is None:
                     raise
-                if not failed_runs:
-                    timer.handled()
-                    timer.fail(failure_reason(store_error))
+                if self._failed_runs.fail(timer, store_error):
                     tally.end(timer, self._lines)
                 return True
             except asyncio.CancelledError:
                 if tally.claimed:
                     tally.end(timer, self._lines, cancelled=True)
                 raise
-            if failed_runs:
-                timer.add(failed_run_count=failed_runs)
+            self._failed_runs.recover(timer)
             tally.end(timer, self._lines)
         return False
 
@@ -476,6 +540,13 @@ class _Serving:
             claim.surely_until = extension_began_at + self._claim_seconds
         else:
             claim.lost = True
+
+
+def checked_every(every: timedelta, lasts: timedelta) -> timedelta:
+    """Return `every` when it is a positive timedelta below `lasts`, else raise ValueError."""
+    if checked_span(every, argument="every") >= lasts:
+        raise ValueError(f"every must be below lasts ({lasts}), got {every!r}")
+    return every
 
 
 def checked_span(value: timedelta, *, argument: str) -> timedelta:

@@ -37,6 +37,7 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `await locks.acquire(name)` | [LOCK-3] Starts the lock on `name` under a fresh random 128-bit generation and returns it, or returns None when a live lock holds `name`, the holder asking again included: a lock is not re-entrant, and `acquire` never extends one. [LOCK-4] After a Redis restart it returns None until `lasts` have passed since the app's epoch. None therefore means "not yours yet": it answers a live holder and the `lasts` after a restart alike, so a host retries later or gives up and never reads None as a fault. [LOCK-10] A reply lost under the client's `Retry` replays `acquire` to the same generation. |
 | `await locks.extend(name, generation)` | [LOCK-5] Keeps the live lock of `generation` for another `lasts` on Redis `TIME`. False, and nothing changes, for an absent, foreign or expired generation, even when nobody took the name since. |
 | `await locks.release(name, generation)` | [LOCK-6] Ends the live lock of `generation` at once; the next `acquire` gets a new generation. False, and nothing changes, for any other generation. [LOCK-7] tandem has no release without the generation: a crashed holder's lock runs out after `lasts`. [LOCK-11] A reply lost under the client's `Retry` replays a `release` that succeeded as False. |
+| `locks.held(name, generation, *, every, cancel_on_loss=True)` | [LOCK-12] An async context manager that extends the lock of `generation` once before the block runs, then every `every`, and releases it at exit unless it was lost. [LOCK-13] `every` is a positive `timedelta` below `lasts`, or the call raises `ValueError` naming `every`. [LOCK-14] A False from the first extension raises `LockLost` and a `StoreError` raises out of the entry; the block does not run and nothing is released, so a generation that a raised entry leaves runs out after `lasts` ([LOCK-7]). [LOCK-15] A failed later extension, an outage or a refusal, is retried after `every` and never ends the block; a run of failed extensions, counted per block, is logged once and its recovery too ([LOG-33]). [LOCK-16] The first later extension that returns False is the loss ([LOG-34]): extending stops and the exit releases nothing. With `cancel_on_loss`, a loss cancels the task that entered the block, again every `every` until the block ends, because a cancel scope inside the block can absorb one; the exit withdraws each cancel it delivered and, when they ended the block, raises `LockLost` instead of `CancelledError`, as `asyncio.timeout` raises `TimeoutError`. A block that ended first exits as it ended, and the host's own cancellation still propagates. Entry and exit must then run in one task, or the exit raises `RuntimeError` once it has stopped the keeper and released the lock unless it was lost. With `cancel_on_loss=False` the keeper touches no task: the block runs on, told only by the line, and fences its work itself (duty 8); entry and exit may run in different tasks. [LOCK-17] At exit an extension in flight completes, then the lock is released unless it was lost, shielded from cancellation: a cancellation that arrives during either step is held until both end, then propagates. |
 | `await locks.state(name)` | [LOCK-8] A `LockState(liveness, generation, remaining)`, read in one script. ALIVE while held, with the holder's `generation` and the `remaining` time; GONE when free; UNKNOWN until `lasts` have passed since the epoch when Redis may have lost the lock. |
 | `locks.keys`, `locks.lasts` | [LOCK-9] The `LockKeys` (`epoch`, `expiry`, `generation`) and the `lasts` of the family, for a host's script that calls `tandem.lock_state`. A script gets the keys as `KEYS` in the order `epoch`, `expiry`, `generation` and builds the table with `local keys = {epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}`. |
 | `Slots(redis, *, key_prefix, family, lasts)` | The counted holds of one `family` of one app. A hold lasts `lasts` after its take. [SLOT-1] `key_prefix` and `family` are each one segment matching `[a-z0-9][a-z0-9-]*`, and `lasts` is a positive `timedelta`; anything else raises `ValueError` naming the argument. [SLOT-2] A pool is any string. |
@@ -46,6 +47,7 @@ behind the design are in [ARCHITECTURE](ARCHITECTURE.md).
 | `Lapse(holder, generation, due)` | A lease that ended or expired, with the generation it had. |
 | `Roster(holders, settled)` | The result of `live`. |
 | `Hold(generation)` | What `kept` yields. |
+| `LockLost` | The exception of `held`, with no fields: its lock is not the block's any more, at the entry or at the exit of a block that a loss cancelled ([LOCK-14], [LOCK-16]). |
 | `LeaseState(liveness, generation, remaining)` | The result of `leases.state` for one holder: `generation` and `remaining` are None unless ALIVE. |
 | `LockState(liveness, generation, remaining)` | The result of `locks.state`: `generation` and `remaining` are None unless ALIVE. |
 | `LockKeys` | The record `locks.keys` returns. |
@@ -131,7 +133,7 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 |---|---|---|---|
 | [LOG-3] `lease_renewal.ended`, `lease_end.ended` | `tandem.leases` | info; error when it failed | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `error_type` when failed |
 | [LOG-4] `lease_state_read.ended`, `lease_roster_read.ended` | `tandem.leases` | info; error when it failed | `outcome`, `duration_ms`, `lease_family`; `error_type` when failed |
-| [LOG-5] `lock_acquisition.ended`, `lock_extension.ended`, `lock_release.ended`, `lock_state_read.ended` | `tandem.locks` | info; error when it failed | `outcome`, `duration_ms`, `lock_family`; `error_type` when failed |
+| [LOG-5] `lock_acquisition.ended`, `lock_extension.ended`, `lock_release.ended`, `lock_state_read.ended` | `tandem.locks` | info; error when it failed; `lock_release.ended` at the exit of `held` is a warning when a cancellation before the release hides a failed release and no cancellation reaches the release itself ([LOG-36]) | `outcome`, `duration_ms`, `lock_family`; `error_type` when failed |
 | [LOG-6] `slot_take.ended`, `slot_release.ended` | `tandem.slots` | info; error when it failed | `outcome`, `duration_ms`, `slot_family`; `error_type` when failed. A None or False answer is `ok`; no line carries a pool or a token |
 | [LOG-7] `wake_publication.ended` | `tandem.wake` | info; error when it failed | `outcome`, `duration_ms`; `error_type` when failed |
 | [LOG-8] `lease_keeping.ended`, a background run of renewals of `kept` that fails: its first failed renewal, then the first renewal that succeeds after the run | `tandem.leases` | warning for the first failure, info for the recovery | `outcome`, `duration_ms`, `lease_family`, `holder_id`; `reason` (`outage` or `refused`) when failed; `failed_run_count` at the recovery, which counts the run; the run is per `kept` block |
@@ -146,15 +148,24 @@ handler gets an ordinary record at its own level and handler, the fields kept. [
 | [LOG-28] `deadline_handling.ended`, one `handle` of `serve_due` | `tandem.deadlines` | info; warning when its claim was not kept; error when it failed | `outcome`, `duration_ms`, `deadline_kind`; `error_type` when failed; `claim_kept` (false) when the claim was lost or may have run out before `handle` ended, so another worker may handle it too |
 | [LOG-29] `deadline_round.ended`, one round of `serve_due` that claimed a key, or the first failure or the recovery of a run of failed rounds | `tandem.deadlines` | info; warning for the first failure of a run of failed rounds | `outcome`, `duration_ms`, `deadline_kind`, `deadline_count`, `failed_count`; `failed_run_count` on a recovery; `reason` (`outage` or `refused`) on a first failure |
 | [LOG-30] `deadline_handler.failed`, a `handle` that raised without a `StoreError` in its failure | `tandem.deadlines` | error, with the traceback | `error_type`, `deadline_kind` |
+| [LOG-33] `lock_keeping.ended`, a background run of extensions of `held` that fails: its first failed extension, then the first extension that succeeds after the run | `tandem.locks` | warning for the first failure, info for the recovery | `outcome`, `duration_ms`, `lock_family`; `reason` (`outage` or `refused`) when failed; `failed_run_count` at the recovery, which counts the run; the run is per `held` block |
+| [LOG-34] `lock.lost`, the first extension of `held` after its entry that returned False | `tandem.locks` | warning | `lock_family` |
+| [LOG-35] `lock_release.failed`, the release at the exit of `held` failed after a cancellation | `tandem.locks` | error | `error_type`, `lock_family` |
 
 - [LOG-18] `outcome` is `ok`, `failed` or `cancelled`; a failed call raises `StoreError` after its line, and a
   `False` or `None` answer is `ok`. [LOG-19] A `kept` writes `lease_renewal.ended` for its first renewal only: its
   background renewals write `lease_keeping.ended` only for the first failure of a run and its recovery, and its
   end at the exit writes `lease_end.ended` like a direct `end`; when a cancellation hides a failed end,
   `lease_end.failed` is its one error line.
+- [LOG-36] A `held` writes `lock_extension.ended` for its entry only: its background extensions write
+  `lock_keeping.ended` only for the first failure of a run and its recovery, and `lock.lost` for a loss, and its
+  exit writes `lock_release.ended` like a direct `release`, except after a loss; `lock_release.failed` is its one
+  error line when a cancellation hides a failed release; that exit's `lock_release.ended` is then a warning, not the
+  info of [LOG-5], only when the cancellation came before the release and the release ran uncancelled; a cancellation
+  during the release leaves `lock_release.ended` at info with outcome `cancelled`.
 - [LOG-20] A refusal that reaches the host as `StoreError` out of the entry of `following` writes no line:
   the host's layer logs it.
-- [LOG-21] A holder is an id (see duty 11), so `holder_id` is the holder string. [LOG-22] No line carries a generation, a lapse's
+- [LOG-21] A holder is an id (see duty 11), so `holder_id` is the holder string. [LOG-22] No line carries a generation, a lock's name, a lapse's
   key, a deadline key, a claim token, a wake payload, a traceparent or the text of a `StoreError`.
 - [LOG-23] A lapse or a due key is delivered at least once, so a replay writes a second `lapse_handling.ended` or `deadline_handling.ended`.
 - [LOG-24] The wake carries its sender's traceparent: `following` calls `on_wake` inside `unit_trace(wake.traceparent)`,
@@ -220,13 +231,12 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    `on_resync` and at its periodic idempotent reconcile, and reads GONE as the signal that nobody renews. The
    limits are those of duty 3: a `FLUSHALL` on an open subscription and a host without a wake channel are
    repaired only by the reconcile period.
-8. **Keep the generation and stop at the first `extend` or `release` that returns False, because the work under
-   the lock is the host's own.** The lock is then lost or ended, and whoever kept working under it fences its
-   effects with the generation, as in duty 6. A reply lost under the client's `Retry` is replayed as
-   [LOCK-10] and [LOCK-11] state.
+8. **Fence the work under a lock with its generation, because a lock can be lost under its holder:** `held` stops
+   the block at a loss, or only tells a block that fences itself; a host that calls `extend` itself stops at its
+   first `False` ([LOCK-10], [LOCK-11]); work that went on after the loss is refused by the host's own store.
 9. **Extend before `lasts` run out, with one `lasts` per family kept once in configuration every pod reads,
-   because only the holder knows it still works.** A holder that pauses past `lasts` loses its lock to the
-   next `acquire`. Every write stamps its end as Redis time plus the writing pod's span, and every pod reads
+   because only the holder knows it still works.** `held` does it every `every`. A holder whose event loop
+   stalls past `lasts` loses its lock to the next `acquire`. Every write stamps its end as Redis time plus the writing pod's span, and every pod reads
    that stored end, so a live lease, lock or claim reads alike on every pod. The reading pod's own `lasts` decides only how
    long it reads an absent lock as UNKNOWN after a Redis restart (`tandem.epoch_settled`; [LOCK-4], [LOCK-8]),
    so a pod with a shorter `lasts` may read a lost lock free early by at most the difference, under the
