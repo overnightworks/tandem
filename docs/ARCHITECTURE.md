@@ -144,11 +144,14 @@ whether the wake arrived. The [reference](reference.md) says how a failure reach
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event with its fields in `extra=`. logline's `StepTimer`
-times `publish`, each lease call, each lock call and each slot call; `Deadlines` and `Script.run` write no line. A lapse
-handler and a `serve_lapses` round write their own lines, because their levels and traceback do not fit the
-timer. tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
-generation, a value that can end a lease, or a slot's pool or token. Each lapse handling runs in its own trace (`unit_trace`), so its
-lines and the host handler's share a `trace_id`. The [reference](reference.md#what-tandem-logs) lists the
+times `publish`, each lease call, each lock call and each slot call, each lapse handling and each `serve_lapses`
+round that writes a line; `Deadlines` and `Script.run` write no line. A round writes none when it claimed no lapse
+and no outage failed it, so an outage costs two lines, the first failure and the recovery, not one per round per pod.
+A failed handler's traceback is a line of its own, `lapse_handler.failed`, because a step line never carries one.
+tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
+generation, a value that can end a lease, or a slot's pool or token. Each round and each lapse handling runs in its
+own trace (`unit_trace`), so the lines of a handling and the host handler's share a `trace_id`, and, from logline
+v1.9.0, a step the handler opens hangs under the handling's span. The [reference](reference.md#what-tandem-logs) lists the
 events; they are public.
 
 **Proof strategy.** The tests run every cell against a real Redis, and the cells of the plain flow also run
