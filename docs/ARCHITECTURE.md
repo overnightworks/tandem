@@ -145,8 +145,8 @@ whether the wake arrived. The [reference](reference.md) says how a failure reach
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event with its fields in `extra=`. logline's `StepTimer`
 times `publish`, each lease call, each lock call and each slot call, each lapse handling and each `serve_lapses`
-round that writes a line; `Deadlines` and `Script.run` write no line. A round writes none when it claimed no lapse
-and no outage failed it, so an outage costs two lines, the first failure and the recovery, not one per round per pod.
+round that writes a line; `Deadlines` and `Script.run` write no line. A round that claimed no lapse writes a line only
+as the first failure of a run of outages or as the recovery after one, so an outage costs two lines, not one per round per pod.
 A failed handler's traceback is a line of its own, `lapse_handler.failed`, because a step line never carries one.
 tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
 generation, a value that can end a lease, or a slot's pool or token. Each round and each lapse handling runs in its
