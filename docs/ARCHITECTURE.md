@@ -236,6 +236,7 @@ the commands and the rules for waits and outages.
 
 - Redis pub/sub is at most once: a wake published while a subscription is down is lost, and only the host's
   re-read at `on_resync` and its handling of a failed `publish` bring the pods back in line.
-- The reader blocks in a read with no timeout, as redis-py's pub/sub does, so a connection that dies
-  without closing is noticed late. `on_resync` and `on_wake` run one at a time in Redis's order, so a slow
+- From redis-py 8.2 the reader blocks in a read with no timeout, as redis-py's pub/sub does, so a connection
+  that dies without closing is noticed late; below 8.0.1 the read ends at the client's `socket_timeout` and the
+  reader subscribes again. `on_resync` and `on_wake` run one at a time in Redis's order, so a slow
   synchronous handler holds every later wake and a long first re-read delays the entry's return.
