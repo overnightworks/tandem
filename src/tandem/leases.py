@@ -4,7 +4,7 @@ import asyncio
 import contextlib
 import logging
 import secrets
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -185,33 +185,26 @@ class _LapseLines:
             "lapse_round.ended", logger, lease_family=self._family, **self.round_counts(0, 0)
         )
 
-    def handling_timer(self, due: Due) -> StepTimer:
-        return _lease_step_timer("lapse_handling.ended", self._family, _lapse_of(due).holder)
+    def handling_timer(self, fields: Mapping[str, str]) -> StepTimer:
+        timer = StepTimer("lapse_handling.ended", logger)
+        timer.add(**fields)
+        return timer
 
-    def handler_failed(self, due: Due, error: Exception) -> None:
+    def handler_failed(self, fields: Mapping[str, str], error: Exception) -> None:
         logger.error(
             "lapse_handler.failed",
-            extra={
-                "error_type": type(error).__name__,
-                **_lease_fields(self._family, _lapse_of(due).holder),
-            },
+            extra={"error_type": type(error).__name__, **fields},
             exc_info=error,
         )
 
-    def extension_failed(self, due: Due, error: StoreError) -> None:
+    def extension_failed(self, fields: Mapping[str, str], error: StoreError) -> None:
         logger.warning(
             "lapse_claim_extension.failed",
-            extra={
-                "reason": failure_reason(error),
-                "error_type": type(error).__name__,
-                **_lease_fields(self._family, _lapse_of(due).holder),
-            },
+            extra={"reason": failure_reason(error), "error_type": type(error).__name__, **fields},
         )
 
-    def claim_expired(self, due: Due) -> None:
-        logger.warning(
-            "lapse_claim.expired", extra=_lease_fields(self._family, _lapse_of(due).holder)
-        )
+    def claim_expired(self, fields: Mapping[str, str]) -> None:
+        logger.warning("lapse_claim.expired", extra=fields)
 
 
 def _lease_fields(family: str, holder: str) -> dict[str, str]:
@@ -410,6 +403,9 @@ class Leases:
         async def handle_due(due: Due) -> None:
             await handle(_lapse_of(due))
 
+        def lapse_fields(due: Due) -> dict[str, str]:
+            return _lease_fields(self._family, _lapse_of(due).holder)
+
         await serve_queue(
             self._lapses,
             handle_due,
@@ -417,6 +413,7 @@ class Leases:
             before_claim=self._sweep_expired,
             back_off=self._back_off,
             lines=_LapseLines(self._family),
+            due_fields=lapse_fields,
         )
 
     async def _sweep_expired(self) -> None:

@@ -527,9 +527,10 @@ async def test_every_that_is_not_a_positive_timedelta_is_refused(
 ):
     """Spec: DEADLINE-26."""
     deadlines = new_deadlines(make_client(redis_url))
+    handler = Handler[Due]()
 
     with pytest.raises(ValueError, match="every"):
-        await deadlines.serve_due(Handler[Due](), every=every)  # pyright: ignore[reportArgumentType]
+        await deadlines.serve_due(handler, every=every)  # pyright: ignore[reportArgumentType]
 
 
 async def test_cancelling_the_loop_cancels_the_handler_and_the_claim_runs_out_for_another_worker(

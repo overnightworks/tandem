@@ -5,7 +5,7 @@ import logging
 import math
 import secrets
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import NoReturn, Protocol, cast
@@ -234,19 +234,19 @@ class Deadlines(DeadlineQueue):
 
 class ServingLines(Protocol):
     """What a serving loop writes: each owner names its own events, which logline's check reads as
-    literals, and the fields that identify its keys."""
+    literals. The `fields` of a due key come from the owner's `due_fields` and identify it."""
 
     def round_counts(self, claimed: int, failed: int) -> dict[str, int]: ...
 
     def round_timer(self) -> StepTimer: ...
 
-    def handling_timer(self, due: Due) -> StepTimer: ...
+    def handling_timer(self, fields: Mapping[str, str]) -> StepTimer: ...
 
-    def handler_failed(self, due: Due, error: Exception) -> None: ...
+    def handler_failed(self, fields: Mapping[str, str], error: Exception) -> None: ...
 
-    def extension_failed(self, due: Due, error: StoreError) -> None: ...
+    def extension_failed(self, fields: Mapping[str, str], error: StoreError) -> None: ...
 
-    def claim_expired(self, due: Due) -> None: ...
+    def claim_expired(self, fields: Mapping[str, str]) -> None: ...
 
 
 class _DeadlineLines:
@@ -261,28 +261,31 @@ class _DeadlineLines:
             "deadline_round.ended", logger, deadline_kind=self._kind, **self.round_counts(0, 0)
         )
 
-    def handling_timer(self, due: Due) -> StepTimer:
-        return StepTimer("deadline_handling.ended", logger, deadline_kind=self._kind)
+    def handling_timer(self, fields: Mapping[str, str]) -> StepTimer:
+        timer = StepTimer("deadline_handling.ended", logger, deadline_kind=self._kind)
+        timer.add(**fields)
+        return timer
 
-    def handler_failed(self, due: Due, error: Exception) -> None:
+    def handler_failed(self, fields: Mapping[str, str], error: Exception) -> None:
         logger.error(
             "deadline_handler.failed",
-            extra={"error_type": type(error).__name__, "deadline_kind": self._kind},
+            extra={"error_type": type(error).__name__, "deadline_kind": self._kind, **fields},
             exc_info=error,
         )
 
-    def extension_failed(self, due: Due, error: StoreError) -> None:
+    def extension_failed(self, fields: Mapping[str, str], error: StoreError) -> None:
         logger.warning(
             "deadline_claim_extension.failed",
             extra={
                 "reason": failure_reason(error),
                 "error_type": type(error).__name__,
                 "deadline_kind": self._kind,
+                **fields,
             },
         )
 
-    def claim_expired(self, due: Due) -> None:
-        logger.warning("deadline_claim.expired", extra={"deadline_kind": self._kind})
+    def claim_expired(self, fields: Mapping[str, str]) -> None:
+        logger.warning("deadline_claim.expired", extra={"deadline_kind": self._kind, **fields})
 
 
 @dataclass
@@ -324,6 +327,7 @@ async def serve_queue(
     before_claim: Callable[[], Awaitable[None]] | None,
     back_off: Callable[[float], Awaitable[None]],
     lines: ServingLines,
+    due_fields: Callable[[Due], Mapping[str, str]] | None = None,
 ) -> NoReturn:
     """Serve what comes due on `queue` until cancelled: the loop of `serve_due` and `serve_lapses`.
 
@@ -333,7 +337,7 @@ async def serve_queue(
     is not `handle`'s ends the loop.
     """
     pause = checked_span(every, argument="every").total_seconds()
-    serving = _Serving(queue, handle, before_claim, lines)
+    serving = _Serving(queue, handle, before_claim, lines, due_fields)
     backoff = BACKOFF_FIRST_SECONDS
     failed_runs = 0
     while True:
@@ -354,12 +358,14 @@ class _Serving:
         handle: Callable[[Due], Awaitable[None]],
         before_claim: Callable[[], Awaitable[None]] | None,
         lines: ServingLines,
+        due_fields: Callable[[Due], Mapping[str, str]] | None,
     ) -> None:
         self._queue = queue
         self._handle = handle
         self._claim_seconds = queue.claim_for.total_seconds()
         self._before_claim = before_claim
         self._lines = lines
+        self._due_fields = due_fields
 
     async def round(self, failed_runs: int) -> bool:
         """One round in a trace of its own; True when it failed on Redis.
@@ -397,6 +403,9 @@ class _Serving:
             tally.end(timer, self._lines)
         return False
 
+    def _fields_of(self, due: Due) -> Mapping[str, str]:
+        return {} if self._due_fields is None else self._due_fields(due)
+
     async def _handle_batch(self, batch: list[Due], tally: _RoundTally) -> None:
         pending = set(batch)
         extender = asyncio.create_task(self._extend_while_pending(pending))
@@ -420,12 +429,12 @@ class _Serving:
         failure = None
         with unit_trace(None):
             try:
-                async with self._lines.handling_timer(due):
+                async with self._lines.handling_timer(self._fields_of(due)):
                     await self._handle(due)
             except Exception as error:
                 failure = error
                 if _store_error_in(error) is None:
-                    self._lines.handler_failed(due, error)
+                    self._lines.handler_failed(self._fields_of(due), error)
         pending.discard(due)
         if failure is not None:
             tally.failed += 1
@@ -453,7 +462,7 @@ class _Serving:
             try:
                 kept = await self._queue.extend(due)
             except StoreError as error:
-                self._lines.extension_failed(due, error)
+                self._lines.extension_failed(self._fields_of(due), error)
                 if error.outage:
                     # Redis may have applied the extension before its reply was lost, so
                     # the claim's end is unknown: stop watching rather than call it expired.
@@ -463,7 +472,7 @@ class _Serving:
                 return
             runs_out_at[due] = time.monotonic() + self._claim_seconds
         if not kept:
-            self._lines.claim_expired(due)
+            self._lines.claim_expired(self._fields_of(due))
             pending.discard(due)
 
 
