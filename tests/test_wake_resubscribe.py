@@ -3,6 +3,8 @@ import contextlib
 import sys
 from collections.abc import Callable
 
+import pytest
+import redis
 from redis.asyncio import Redis
 from redis.asyncio.retry import Retry
 from redis.backoff import ConstantBackoff, NoBackoff
@@ -15,7 +17,14 @@ from tests.support.host import ScenarioHost
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
 from tests.support.reader import Reader
-from tests.support.waiting import within
+from tests.support.waiting import elapsed, within
+
+_REDIS_PY_VERSION = tuple(int(part) for part in redis.__version__.split(".")[:3])
+_QUIET_SOCKET_TIMEOUT_SECONDS = 0.2
+_QUIET_INTERVALS = 5
+_RANGE_EXCLUDES_THE_HANGING_RELEASES = (
+    "tandem's range excludes redis-py 8.0.1 to 8.1.x, so below 8.2 means below 8.0.1"
+)
 
 
 async def _reader_connection_ids(observer: Redis, key_prefix: str) -> list[int]:
@@ -44,6 +53,50 @@ async def test_a_killed_subscription_is_resubscribed_once_and_wakes_continue(
 
         assert await reader.next_wake() == Wake("next")
         assert reader.drain() == []
+
+
+@pytest.mark.skipif(
+    _REDIS_PY_VERSION < (8, 2),
+    reason=f"WAKE-30 holds from redis-py 8.2: {_RANGE_EXCLUDES_THE_HANGING_RELEASES}",
+)
+async def test_a_quiet_channel_keeps_its_subscription_beyond_the_clients_socket_timeout(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    """Spec: WAKE-30."""
+    client = make_client(
+        redis_url,
+        retry=Retry(ConstantBackoff(0.05), 3),
+        socket_timeout=_QUIET_SOCKET_TIMEOUT_SECONDS,
+    )
+    publisher = WakeChannel(make_client(redis_url), key_prefix=key_prefix)
+    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+        await reader.next_resynced()
+
+        await elapsed(_QUIET_INTERVALS * _QUIET_SOCKET_TIMEOUT_SECONDS)
+        assert reader.drain() == []
+        await publisher.publish("after-quiet")
+
+        assert await reader.next_wake() == Wake("after-quiet")
+        assert reader.drain() == []
+
+
+@pytest.mark.skipif(
+    _REDIS_PY_VERSION >= (8, 2),
+    reason=f"WAKE-30 holds below redis-py 8.0.1: {_RANGE_EXCLUDES_THE_HANGING_RELEASES}",
+)
+async def test_a_quiet_channel_resubscribes_at_the_clients_socket_timeout(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str
+):
+    """Spec: WAKE-30."""
+    client = make_client(
+        redis_url,
+        retry=Retry(ConstantBackoff(0.05), 3),
+        socket_timeout=_QUIET_SOCKET_TIMEOUT_SECONDS,
+    )
+    async with Reader(WakeChannel(client, key_prefix=key_prefix)) as reader:
+        await reader.next_resynced()
+
+        await reader.next_resynced()
 
 
 async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
