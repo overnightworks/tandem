@@ -1,8 +1,0 @@
-claim_id = "c95538ba3be846f99794643121cf19ff"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "24ac572bbcf45dfc50d21ee29747ee558a7baff4"
-branch = "claude/issue-116-the-wake-follows-only-on-redis-py-releas"
-scope = ["docs/ARCHITECTURE.md", "docs/reference.md", "pyproject.toml", "tests/test_wake_resubscribe.py", "uv.lock"]
-opened_commit = "b9ac748a32a28e3f0e95219e00406ddd30dab5b7"
-whole_reason = "One dependency range with the documents and the test that state what it admits; split, the range would ship without its duty or the duty without its range."
