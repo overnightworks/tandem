@@ -68,7 +68,8 @@ for container in "${shared}" "${restartable}"; do
 done
 
 published_port() {
-    docker port "$1" 6379/tcp | head -n 1 | sed 's/.*://'
+    local container_name="$1"
+    docker port "${container_name}" 6379/tcp | head -n 1 | sed 's/.*://'
 }
 
 # Run as a child, not exec'd, so that the trap above survives the command.
