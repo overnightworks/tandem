@@ -425,7 +425,11 @@ async def test_each_lapse_handling_has_its_own_trace_and_the_steps_of_its_handle
         assert step.get("parent_span_id") == line.get("span_id")
 
 
-@pytest.mark.parametrize(("raised", "failed_count"), [(None, 0), (ValueError, 1)])
+@pytest.mark.parametrize(
+    ("raised", "failed_count"),
+    [(None, 0), (ValueError, 1)],
+    ids=["a handled lapse", "a failed lapse counts in failed_count"],
+)
 async def test_a_round_claiming_no_lapse_writes_no_line_and_one_that_did_writes_its_counts(
     raised: type[Exception] | None,
     failed_count: int,
