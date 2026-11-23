@@ -177,10 +177,18 @@ async def test_an_entry_with_a_generation_that_is_not_live_raises_lock_lost_and_
     """Spec: LOCK-14."""
     holder = await _acquired(pod)
 
-    with pytest.raises(LockLost):
-        async with pod.held(NAME, "not the holder's", every=EVERY, cancel_on_loss=cancel_on_loss):
-            pytest.fail("the body must not run")
+    entering = pod.held(NAME, "not the holder's", every=EVERY, cancel_on_loss=cancel_on_loss)
+    body_ran = False
 
+    async def enter() -> None:
+        nonlocal body_ran
+        async with entering:
+            body_ran = True
+
+    with pytest.raises(LockLost):
+        await enter()
+
+    assert not body_ran
     assert (await pod.state(NAME)).generation == holder
 
 
@@ -188,11 +196,20 @@ async def test_a_refusal_at_the_entry_raises_store_error_and_the_body_does_not_r
     url_with_wrong_password: str, make_client: Callable[..., Redis], new_locks: Callable[..., Locks]
 ):
     """Spec: LOCK-14."""
-    locks = new_locks(make_client(url_with_wrong_password), lasts=LASTS)
+    entering = new_locks(make_client(url_with_wrong_password), lasts=LASTS).held(
+        NAME, "any generation", every=EVERY
+    )
+    body_ran = False
+
+    async def enter() -> None:
+        nonlocal body_ran
+        async with entering:
+            body_ran = True
 
     with pytest.raises(StoreError):
-        async with locks.held(NAME, "any generation", every=EVERY):
-            pytest.fail("the body must not run")
+        await enter()
+
+    assert not body_ran
 
 
 async def test_a_run_of_failed_extensions_is_ridden_out_and_writes_its_first_failure_and_recovery(
@@ -276,10 +293,15 @@ async def test_a_loss_in_cancel_mode_ends_the_block_with_lock_lost_and_releases_
     task = asyncio.current_task()
     assert task is not None
 
-    with pytest.raises(LockLost) as lost:
-        async with pod.held(NAME, generation, every=EVERY):
+    entering = pod.held(NAME, generation, every=EVERY)
+
+    async def block_that_loses_its_lock() -> None:
+        async with entering:
             await wipe(observer, key_prefix)
             await _never()
+
+    with pytest.raises(LockLost) as lost:
+        await block_that_loses_its_lock()
 
     assert lost.value.__suppress_context__
     assert task.cancelling() == 0
@@ -599,7 +621,9 @@ async def test_cancel_mode_exited_in_another_task_raises_runtime_error_after_the
     stack = AsyncExitStack()
     await stack.enter_async_context(pod.held(NAME, generation, every=EVERY))
 
+    exit_task = asyncio.create_task(stack.aclose())
+
     with pytest.raises(RuntimeError):
-        await asyncio.create_task(stack.aclose())
+        await exit_task
 
     assert (await pod.state(NAME)).liveness is Liveness.GONE
