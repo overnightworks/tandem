@@ -18,6 +18,7 @@ from tests.support.deadlines import (
     redis_ms,
     serving,
     state_of,
+    store_error_behind_a_host_error,
     until_redis_ms,
 )
 from tests.support.logs import LogLines
@@ -51,15 +52,6 @@ def deadlines_through_proxy(
 ) -> Callable[[Backoffs], BackoffRecordingDeadlines]:
     """Deadlines through the proxy whose back-offs go to `backoffs`."""
     return lambda backoffs: recording_deadlines(proxied_client, backoffs)
-
-
-def _host_error_over_a_refusal() -> Exception:
-    try:
-        raise StoreError("a refusal naming the store")
-    except StoreError as refusal:
-        wrapped = ValueError("the host gave up")
-        wrapped.__cause__ = refusal
-        return wrapped
 
 
 async def test_a_due_key_reaches_the_handler_and_done_follows(
@@ -227,7 +219,7 @@ async def test_a_handling_writes_one_line_with_its_outcome_and_no_key_or_token(
     ("failure", "writes_traceback"),
     [
         (lambda: ValueError("the handler fails"), True),
-        (_host_error_over_a_refusal, False),
+        (store_error_behind_a_host_error, False),
     ],
     ids=["a host error", "a store error in its chain"],
 )
@@ -410,7 +402,7 @@ async def test_a_refusal_is_ridden_out_with_one_warning_and_one_recovery_once_th
     ("failure", "reason"),
     [
         (lambda: StoreError("reconcile lost Redis", outage=True), "outage"),
-        (_host_error_over_a_refusal, "refused"),
+        (store_error_behind_a_host_error, "refused"),
     ],
     ids=["an outage raised directly", "a refusal chained in a host error"],
 )

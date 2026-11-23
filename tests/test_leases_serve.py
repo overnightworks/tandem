@@ -15,7 +15,12 @@ from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
 from tandem.keys import lease_keys
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
-from tests.support.deadlines import SERVING_EVERY, redis_ms, until_redis_ms
+from tests.support.deadlines import (
+    SERVING_EVERY,
+    redis_ms,
+    store_error_behind_a_host_error,
+    until_redis_ms,
+)
 from tests.support.leases import Handled, liveness_of, serving, until_gone
 from tests.support.logs import LogLines
 from tests.support.proxy import TcpProxy
@@ -340,15 +345,6 @@ def _store_error_raised_directly() -> Exception:
     return StoreError("a refusal naming the store")
 
 
-def _store_error_behind_a_host_error() -> Exception:
-    try:
-        raise StoreError("a refusal naming the store")
-    except StoreError as refusal:
-        wrapped = ValueError("the host gave up")
-        wrapped.__cause__ = refusal
-        return wrapped
-
-
 def _store_error_inside_a_group() -> Exception:
     return ExceptionGroup("the host's tasks failed", [StoreError("a refusal naming the store")])
 
@@ -367,7 +363,7 @@ def _host_error_raised_from_another() -> Exception:
     ("failure", "error_type", "writes_traceback"),
     [
         (_store_error_raised_directly, StoreError, False),
-        (_store_error_behind_a_host_error, ValueError, False),
+        (store_error_behind_a_host_error, ValueError, False),
         (_store_error_inside_a_group, ExceptionGroup, False),
         (_host_error_raised_from_another, ValueError, True),
     ],

@@ -9,7 +9,7 @@ from typing import Any, NoReturn, cast
 
 from redis.asyncio import Redis
 
-from tandem import Deadlines, Due, Script
+from tandem import Deadlines, Due, Script, StoreError
 from tests.support.waiting import until, within
 
 TwoPods = tuple[Redis, Deadlines, Deadlines]
@@ -18,6 +18,16 @@ SERVING_EVERY = timedelta(milliseconds=50)
 
 KEYS_OF_THE_SCRIPT = "local keys = {due = KEYS[1], claimed = KEYS[2], claim = KEYS[3]}\n"
 _STATE_SCRIPT = KEYS_OF_THE_SCRIPT + "return tandem.deadline_state(keys, ARGV[1])"
+
+
+def store_error_behind_a_host_error() -> Exception:
+    """A host's own error that chains a `StoreError`, as a handler or `reconcile` may raise it."""
+    try:
+        raise StoreError("a refusal naming the store")
+    except StoreError as refusal:
+        wrapped = ValueError("the host gave up")
+        wrapped.__cause__ = refusal
+        return wrapped
 
 
 async def redis_ms(client: Redis) -> int:
