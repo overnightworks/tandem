@@ -741,7 +741,7 @@ async def test_serve_lapses_takes_no_claimer_argument(
 
 
 @pytest.mark.parametrize("claim_lost", [False, True], ids=["claim kept", "claim lost"])
-async def test_a_cancellation_while_a_handler_runs_writes_handling_and_round_as_cancelled_without_claim_kept(
+async def test_a_cancelled_handling_and_round_are_written_as_cancelled_without_claim_kept(
     claim_lost: bool,
     redis_url: str,
     make_client: Callable[..., Redis],
