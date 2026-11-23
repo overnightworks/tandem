@@ -456,7 +456,7 @@ async def test_a_reconcile_failure_that_is_no_store_error_ends_the_loop_without_
     assert not log_lines.of_logger(LOGGER)
 
 
-async def test_reconcile_runs_before_the_claim_of_every_round(
+async def test_reconcile_runs_in_every_round(
     redis_url: str, make_client: Callable[..., Redis], new_deadlines: Callable[..., Deadlines]
 ):
     """Spec: DEADLINE-27."""
@@ -470,6 +470,52 @@ async def test_reconcile_runs_before_the_claim_of_every_round(
         received = await handler.received(2)
 
     assert [due.key for due in received] == ["room-1", "room-1"]
+
+
+async def test_a_due_key_is_not_claimed_in_a_round_whose_reconcile_failed(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    recording_deadlines: Callable[[Redis, Backoffs], BackoffRecordingDeadlines],
+    backoffs: Backoffs,
+):
+    """Spec: DEADLINE-27."""
+    client = make_client(redis_url)
+    deadlines = recording_deadlines(client, backoffs)
+    await deadlines.set("room-1", timedelta(0))
+    handler = Handler[Due]()
+
+    async def reconcile() -> None:
+        raise StoreError("reconcile lost Redis", outage=True)
+
+    async with serving(deadlines, handler, reconcile=reconcile):
+        await backoffs.reached(2)
+        state = await state_of(client, deadlines, "room-1")
+
+    assert handler.items == []
+    assert state is not None
+    assert state[0] == "waiting"
+
+
+async def test_reconcile_runs_inside_the_trace_of_the_round_that_claims_after_it(
+    redis_url: str,
+    make_client: Callable[..., Redis],
+    new_deadlines: Callable[..., Deadlines],
+    log_lines: LogLines,
+):
+    """Spec: DEADLINE-27."""
+    deadlines = new_deadlines(make_client(redis_url), claim_for=CLAIM_FOR)
+    handler = Handler[Due]()
+
+    async def arm_the_key() -> None:
+        async with StepTimer("host_reconcile.ended", logging.getLogger(_HOST_LOGGER)):
+            await deadlines.arm("room-1", timedelta(0))
+
+    async with serving(deadlines, handler, reconcile=arm_the_key):
+        (first_round, *_) = await log_lines.await_of("deadline_round.ended", LOGGER)
+
+    (first_reconcile, *_) = log_lines.of("host_reconcile.ended", _HOST_LOGGER)
+    assert first_reconcile["trace_id"] is not None
+    assert first_reconcile["trace_id"] == first_round["trace_id"]
 
 
 @pytest.mark.parametrize("every", [timedelta(0), timedelta(seconds=-1), 0.05])
