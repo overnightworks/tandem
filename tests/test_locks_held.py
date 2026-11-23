@@ -23,13 +23,18 @@ EVERY = timedelta(milliseconds=100)
 NAME = "job-7f3a"
 
 
-class _GatedExtension(Locks):
-    """Locks whose extensions after the entry's wait at a gate the test opens."""
+class _GatedLocks(Locks):
+    """Locks whose extensions after the entry's and whose release wait at gates, open until a test
+    closes one with `clear`."""
 
     def __init__(self, *args: Any, **keywords: Any) -> None:
         super().__init__(*args, **keywords)
         self.extending = asyncio.Event()
         self.extend_gate = asyncio.Event()
+        self.releasing = asyncio.Event()
+        self.release_gate = asyncio.Event()
+        self.extend_gate.set()
+        self.release_gate.set()
         self._extensions = 0
 
     async def _extend_untimed(self, name: str, generation: str) -> bool:
@@ -38,15 +43,6 @@ class _GatedExtension(Locks):
             self.extending.set()
             await self.extend_gate.wait()
         return await super()._extend_untimed(name, generation)
-
-
-class _GatedRelease(Locks):
-    """Locks whose release waits at a gate the test opens."""
-
-    def __init__(self, *args: Any, **keywords: Any) -> None:
-        super().__init__(*args, **keywords)
-        self.releasing = asyncio.Event()
-        self.release_gate = asyncio.Event()
 
     async def _release_untimed(self, name: str, generation: str) -> bool:
         self.releasing.set()
@@ -99,6 +95,21 @@ def new_observed_locks(
     def build(client: Redis) -> Locks:
         return ExtendObservedLocks(
             client, key_prefix=key_prefix, family=FAMILY, lasts=LASTS, attempts=attempts
+        )
+
+    return build
+
+
+@pytest.fixture
+def new_gated_locks(
+    redis_url: str, make_client: Callable[..., Redis], key_prefix: str, settled_epoch: None
+) -> Callable[..., _GatedLocks]:
+    def build(url: str | None = None) -> _GatedLocks:
+        return _GatedLocks(
+            make_client(redis_url if url is None else url),
+            key_prefix=key_prefix,
+            family=FAMILY,
+            lasts=LASTS,
         )
 
     return build
@@ -403,17 +414,14 @@ async def test_a_loss_in_tell_only_mode_is_only_told_and_the_block_exits_in_anot
 async def test_a_false_from_an_extension_in_flight_at_the_exit_changes_neither_ending_nor_release(
     cancel_on_loss: bool,
     raises: bool,
-    redis_url: str,
-    make_client: Callable[..., Redis],
+    new_gated_locks: Callable[..., _GatedLocks],
     key_prefix: str,
     observer: Redis,
-    settled_epoch: None,
     log_lines: LogLines,
 ):
     """Spec: LOCK-16, LOCK-17."""
-    locks = _GatedExtension(
-        make_client(redis_url), key_prefix=key_prefix, family=FAMILY, lasts=LASTS
-    )
+    locks = new_gated_locks()
+    locks.extend_gate.clear()
     generation = await _acquired(locks)
     block_ended = asyncio.Event()
 
@@ -437,16 +445,11 @@ async def test_a_false_from_an_extension_in_flight_at_the_exit_changes_neither_e
 
 
 async def test_the_exit_waits_for_an_extension_in_flight_before_it_releases(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    key_prefix: str,
-    settled_epoch: None,
-    log_lines: LogLines,
+    new_gated_locks: Callable[..., _GatedLocks], log_lines: LogLines
 ):
     """Spec: LOCK-17."""
-    locks = _GatedExtension(
-        make_client(redis_url), key_prefix=key_prefix, family=FAMILY, lasts=LASTS
-    )
+    locks = new_gated_locks()
+    locks.extend_gate.clear()
     generation = await _acquired(locks)
     block_ended = asyncio.Event()
 
@@ -465,15 +468,11 @@ async def test_the_exit_waits_for_an_extension_in_flight_before_it_releases(
 
 
 async def test_a_cancellation_in_the_first_exit_phase_is_held_until_both_phases_end(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    key_prefix: str,
-    settled_epoch: None,
+    new_gated_locks: Callable[..., _GatedLocks],
 ):
     """Spec: LOCK-17."""
-    locks = _GatedExtension(
-        make_client(redis_url), key_prefix=key_prefix, family=FAMILY, lasts=LASTS
-    )
+    locks = new_gated_locks()
+    locks.extend_gate.clear()
     generation = await _acquired(locks)
     cancelled_itself = asyncio.Event()
 
@@ -495,13 +494,11 @@ async def test_a_cancellation_in_the_first_exit_phase_is_held_until_both_phases_
 
 
 async def test_a_cancellation_in_the_second_exit_phase_is_held_until_the_release_ends(
-    redis_url: str,
-    make_client: Callable[..., Redis],
-    key_prefix: str,
-    settled_epoch: None,
+    new_gated_locks: Callable[..., _GatedLocks],
 ):
     """Spec: LOCK-17."""
-    locks = _GatedRelease(make_client(redis_url), key_prefix=key_prefix, family=FAMILY, lasts=LASTS)
+    locks = new_gated_locks()
+    locks.release_gate.clear()
     generation = await _acquired(locks)
 
     async def block() -> None:
@@ -522,19 +519,14 @@ async def test_a_cancellation_in_the_second_exit_phase_is_held_until_the_release
 async def test_a_cancelled_exit_logs_a_failed_release_once_and_the_cancellation_propagates(
     release_fails: bool,
     url_denying: Callable[[str], Awaitable[str]],
-    make_client: Callable[..., Redis],
+    new_gated_locks: Callable[..., _GatedLocks],
     observer: Redis,
     key_prefix: str,
-    settled_epoch: None,
     log_lines: LogLines,
 ):
     """Spec: LOCK-17, LOG-35."""
-    locks = _GatedRelease(
-        make_client(await url_denying("flushall")),
-        key_prefix=key_prefix,
-        family=FAMILY,
-        lasts=LASTS,
-    )
+    locks = new_gated_locks(await url_denying("flushall"))
+    locks.release_gate.clear()
     generation = await _acquired(locks)
     inside = asyncio.Event()
 
