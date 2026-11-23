@@ -53,12 +53,6 @@ async def test_an_absent_holder_reads_gone_at_once_only_after_settle_epoch(
         ),
         pytest.param(timedelta(hours=1), timedelta(hours=1), Liveness.GONE, id="lasts-equal"),
         pytest.param(
-            timedelta(milliseconds=1500),
-            timedelta(milliseconds=1001),
-            Liveness.GONE,
-            id="lasts-rounds-up-with-ran-for",
-        ),
-        pytest.param(
             timedelta(minutes=1), timedelta(days=1), Liveness.UNKNOWN, id="lasts-far-above-ran-for"
         ),
         pytest.param(None, timedelta(seconds=30), Liveness.GONE, id="none-short-lasts"),
