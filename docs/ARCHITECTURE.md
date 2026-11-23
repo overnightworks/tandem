@@ -30,10 +30,14 @@ Module owners in `tandem`:
   `following`, the back-off loop around it and what a host would otherwise write around that loop:
   readiness, the bounded start, the serialised handling, the sender's trace and the split of a failure before
   and after the entry.
-- `deadlines` owns `Deadlines` and `Due`: the deadline scripts and the claim tokens.
-- `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts and the loops of
-  `kept` and `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines` (the transitions of
-  `Deadlines` over any three keys), so a lapse is claimed, extended and finished like a deadline.
+- `deadlines` owns `Deadlines` and `Due`: the deadline scripts, the claim tokens and the serving loop over any
+  deadline queue (`serve_due`): the batches, the claim extension while a handler runs, `done`, the back-off and
+  the lines of a round and a handling.
+- `leases` owns `Leases` and its records: the renew, end, state, live and sweep scripts, the loop of `kept`
+  and the sweep and the lapse lines of `serve_lapses`. Its lapse queue is a `DeadlineQueue` of `deadlines`
+  (the transitions of `Deadlines` over any three keys), and `serve_lapses` runs the loop of `deadlines` on it,
+  so a lapse is claimed, extended and finished like a deadline; `leases` imports `deadlines`, never the
+  reverse.
 - `locks` owns `Locks` and `LockState`: the acquire, extend, release and state scripts and the generations.
   It shares the app's epoch and `Liveness` with `leases` and has no lapse queue.
 - `slots` owns `Slots`: the take and release scripts and the slot tokens. It is no extension of `locks`: a
@@ -46,7 +50,7 @@ Module owners in `tandem`:
   `following`, so a host's tests run the real handler dispatch, and the `following` cells run against it and
   against Redis alike, so a drift fails tandem's CI.
 - `errors` owns `StoreError`, the one mapping of a Redis failure onto it, its classification as an outage or
-  a refusal, and the back-off both loops use.
+  a refusal, and the back-off of the following and of the serving loops.
 
 ## 3. Runtime View
 
@@ -139,18 +143,20 @@ publish and subscribe. The channel carries addresses, never contents: whoever ca
 pod re-read, and nothing more.
 
 **Failure.** Every failure of Redis is a `StoreError` that says whether it was an outage or a refusal;
-`following` and `serve_lapses` ride out an outage and end on a refusal, and `publish` says nothing of
-whether the wake arrived. The [reference](reference.md) says how a failure reaches the host.
+the serving loops (`serve_lapses`, `serve_due`) ride out an outage and a refusal alike, as failed rounds with a
+back-off, and end only when cancelled, while `following` rides out an outage and ends on a refusal, which is its
+`on_failed` contract; `publish` says nothing of whether the wake arrived. The [reference](reference.md) says how a failure reaches the host.
 
 **Logging.** Every log point writes through logline's event contract on a standard-library logger
 `tandem.<module>`: a literal `<noun>.<verb_past>` event with its fields in `extra=`. logline's `StepTimer`
-times `publish`, each lease call, each lock call and each slot call, each lapse handling and each `serve_lapses`
-round that writes a line; `Deadlines` and `Script.run` write no line. A round that claimed no lapse writes a line only
-as the first failure of a run of outages or as the recovery after one, so an outage costs two lines, not one per round per pod.
-A failed handler's traceback is a line of its own, `lapse_handler.failed`, because a step line never carries one.
+times `publish`, each lease call, each lock call and each slot call, and each round and each handling of both
+serving loops, a round only when it writes a line; Deadlines' transitions and `Script.run` write no line. A round
+that claimed nothing writes a line only as the first failure of a run of failed rounds or as the recovery after one,
+so an outage or a refusal costs two lines, not one per round per pod. A failed handler's traceback is a line of its
+own, `lapse_handler.failed` or `deadline_handler.failed`, because a step line never carries one.
 tandem never calls `configure` or structlog: the host owns the process's logging. No line carries a
-generation, a value that can end a lease, or a slot's pool or token. Each round and each lapse handling runs in its
-own trace (`unit_trace`), so the lines of a handling and the host handler's share a `trace_id`, and, from logline
+generation, a value that can end a lease, or a slot's pool or token. Each round and each handling of a
+serving loop runs in its own trace (`unit_trace`), so the lines of a handling and the host handler's share a `trace_id`, and, from logline
 v1.9.0, a step the handler opens hangs under the handling's span. The [reference](reference.md#what-tandem-logs) lists the
 events; they are public.
 
@@ -200,8 +206,9 @@ the commands and the rules for waits and outages.
 - `tandem.lock_state` returns nil for a free lock, so `if tandem.lock_state(...) then` fails closed: a held
   lock and an unsettled epoch both refuse, in one atomic step with the host's write.
 - A lapse leaves the expiry ZSET for the lapse queue in the script that notices it, so a claim on a lapse
-  never touches the expiry that decides ALIVE. `serve_lapses` extends every pending claim of its batch, so the
-  claims of a mass lapse do not run out while earlier handlers run.
+  never touches the expiry that decides ALIVE. The serving loop extends every pending claim of its batch, in
+  `serve_lapses` and `serve_due` alike, so the claims of a mass lapse or of many due keys do not run out while
+  earlier handlers run.
 - Scripts run through the host's client, so its `Retry` can replay one after a lost reply; the
   [reference](reference.md#redis-layout-and-retries) says what a replay does.
 

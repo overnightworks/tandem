@@ -4,33 +4,24 @@ import asyncio
 import contextlib
 import logging
 import secrets
-import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 from typing import NoReturn, cast
 
-from logline import StepTimer, unit_trace
+from logline import StepTimer
 
 from tandem.client import Client
-from tandem.deadlines import DeadlineQueue, Due, checked_span, milliseconds
-from tandem.errors import (
-    BACKOFF_FIRST_SECONDS,
-    FailureReason,
-    StoreError,
-    failure_reason,
-    next_backoff,
-)
+from tandem.deadlines import DeadlineQueue, Due, checked_span, milliseconds, serve_queue
+from tandem.errors import StoreError, failure_reason
 from tandem.keys import lease_keys
 from tandem.script import Script
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 _TOKEN_BYTES = 16  # 128 random bits per generation
-_BATCH = 8  # lapses claimed at once, so a claim does not run out while its batch waits
-_CLAIM_EXTENSIONS_PER_CLAIM = 3
 
 # Every script runs this first: `TIME`, the epoch (set only when absent) and the lease state are one
 # snapshot. ARGV[1] is `lasts` in ms. KEYS: epoch, expiry, generation, then the lapse queue's due,
@@ -174,41 +165,54 @@ class Roster:
     settled: bool  # `lasts` have passed since the epoch: a missing holder is gone, not lost
 
 
-def _holds_store_error(failure: BaseException) -> bool:
-    """True when `failure` or anything it chains or groups is a `StoreError`, which names Redis."""
-    unvisited, visited = [failure], set[int]()
-    while unvisited:
-        error = unvisited.pop()
-        if isinstance(error, StoreError):
-            return True
-        if id(error) in visited:
-            continue
-        visited.add(id(error))
-        unvisited.extend(link for link in (error.__cause__, error.__context__) if link is not None)
-        if isinstance(error, BaseExceptionGroup):
-            unvisited.extend(error.exceptions)
-    return False
-
-
 def _lapse_of(due: Due) -> Lapse:
     # Split at the first ':' only: a generation holds none, a holder may.
     generation, _, holder = due.key.partition(":")
     return Lapse(holder=holder, generation=generation, due=due)
 
 
-@dataclass
-class _RoundTally:
-    """What one `serve_lapses` round did, for its line."""
+class _LapseLines:
+    """The lines of `serve_lapses`; each names the lapse's holder."""
 
-    lapse_count: int = 0
-    failed_count: int = 0
+    def __init__(self, family: str) -> None:
+        self._family = family
 
-    def end(self, timer: StepTimer, *, cancelled: bool = False) -> None:
-        timer.add(lapse_count=self.lapse_count, failed_count=self.failed_count)
-        if cancelled:
-            timer.end_cancelled()
-        else:
-            timer.end()
+    def round_counts(self, claimed: int, failed: int) -> dict[str, int]:
+        return {"lapse_count": claimed, "failed_count": failed}
+
+    def round_timer(self) -> StepTimer:
+        return StepTimer(
+            "lapse_round.ended", logger, lease_family=self._family, **self.round_counts(0, 0)
+        )
+
+    def handling_timer(self, fields: Mapping[str, str]) -> StepTimer:
+        timer = StepTimer("lapse_handling.ended", logger)
+        timer.add(**fields)
+        return timer
+
+    def handler_failed(self, fields: Mapping[str, str], error: Exception) -> None:
+        logger.error(
+            "lapse_handler.failed",
+            extra={"error_type": type(error).__name__, **fields},
+            exc_info=error,
+        )
+
+    def extension_failed(self, fields: Mapping[str, str], error: StoreError) -> None:
+        logger.warning(
+            "lapse_claim_extension.failed",
+            extra={"reason": failure_reason(error), "error_type": type(error).__name__, **fields},
+        )
+
+    def claim_expired(self, fields: Mapping[str, str]) -> None:
+        logger.warning("lapse_claim.expired", extra=fields)
+
+
+def _lease_fields(family: str, holder: str) -> dict[str, str]:
+    return {"lease_family": family, "holder_id": holder}
+
+
+def _lease_step_timer(event: str, family: str, holder: str) -> StepTimer:
+    return StepTimer(event, logger, lease_family=family, holder_id=holder)
 
 
 @dataclass
@@ -261,7 +265,6 @@ class Leases:
         self._redis = redis
         self._family = family
         self._lasts = checked_span(lasts, argument="lasts")
-        self._claim_for = checked_span(claim_for, argument="claim_for")
         self._keys = lease_keys(key_prefix, family)
         self._lasts_ms = milliseconds(lasts)
         self._lapses = DeadlineQueue(redis, self._keys.lapse, claim_for)
@@ -279,7 +282,7 @@ class Leases:
         a renewal that a reply lost under the client's `Retry` replayed still reads as the start it
         was.
         """
-        async with self._step_timer("lease_renewal.ended", holder):
+        async with _lease_step_timer("lease_renewal.ended", self._family, holder):
             return await self._renew_untimed(holder)
 
     async def _renew_untimed(self, holder: str) -> Renewal:
@@ -295,7 +298,7 @@ class Leases:
 
     async def end(self, holder: str, generation: str) -> bool:
         """End the live lease of `generation`, its lapse due now; else change nothing."""
-        async with self._step_timer("lease_end.ended", holder):
+        async with _lease_step_timer("lease_end.ended", self._family, holder):
             return await self._end_untimed(holder, generation)
 
     async def _end_untimed(self, holder: str, generation: str) -> bool:
@@ -348,10 +351,10 @@ class Leases:
         try:
             yield hold
         finally:
-            async with self._step_timer("lease_end.ended", holder):
+            async with _lease_step_timer("lease_end.ended", self._family, holder):
                 await _finished_despite_cancellation(
                     asyncio.create_task(self._finish(stopping, renewer, holder, hold)),
-                    self._lease_fields(holder),
+                    _lease_fields(self._family, holder),
                 )
 
     async def _finish(
@@ -377,7 +380,7 @@ class Leases:
                     extra={
                         "reason": failure_reason(error),
                         "error_type": type(error).__name__,
-                        **self._lease_fields(holder),
+                        **_lease_fields(self._family, holder),
                     },
                 )
 
@@ -391,154 +394,33 @@ class Leases:
 
         Each `every` the expired leases are swept into the lapse queue and the due lapses are
         claimed in small batches until none is due. While `handle` runs its claim is extended every
-        `claim_for / 3`; an extension that fails stops, and `handle` keeps running. `done` follows a
-        `handle` that returns; one that raises is logged and its lapse returns when its claim runs
-        out. An outage of Redis is ridden out with a back-off; a refusal raises `StoreError`.
+        `claim_for / 3`; an extension that Redis fails stops, and `handle` keeps running; any other
+        exception from it ends the loop. `done` follows a `handle` that returns; one that raises is
+        logged and its lapse returns when its claim runs out. An outage or a refusal of Redis is
+        ridden out with the back-off of the wake channel's following.
         """
-        pause = checked_span(every, argument="every").total_seconds()
-        backoff = BACKOFF_FIRST_SECONDS
-        failed_runs = 0
-        while True:
-            try:
-                await self._serve_round(handle, failed_runs)
-            except StoreError as error:
-                if not error.outage:
-                    raise
-                failed_runs += 1
-                await self._back_off(backoff)
-                backoff = next_backoff(backoff)
-                continue
-            failed_runs = 0
-            backoff = BACKOFF_FIRST_SECONDS
-            await asyncio.sleep(pause)
+
+        async def handle_due(due: Due) -> None:
+            await handle(_lapse_of(due))
+
+        def lapse_fields(due: Due) -> dict[str, str]:
+            return _lease_fields(self._family, _lapse_of(due).holder)
+
+        await serve_queue(
+            self._lapses,
+            handle_due,
+            every=every,
+            before_claim=self._sweep_expired,
+            back_off=self._back_off,
+            lines=_LapseLines(self._family),
+            due_fields=lapse_fields,
+        )
+
+    async def _sweep_expired(self) -> None:
+        await self._sweep.run(self._key_names(), self._arguments())
 
     async def _back_off(self, seconds: float) -> None:
         await asyncio.sleep(seconds)
-
-    async def _serve_round(
-        self, handle: Callable[[Lapse], Awaitable[None]], failed_runs: int
-    ) -> None:
-        """One round in a trace of its own. It writes a line when it claimed a lapse, when it is
-        the first failed round of a run of outages and when it ends such a run; `failed_runs` is
-        the number of failed rounds just before it."""
-        timer = StepTimer(
-            "lapse_round.ended", logger, lease_family=self._family, lapse_count=0, failed_count=0
-        )
-        tally = _RoundTally()
-        with unit_trace(None):
-            try:
-                await self._sweep.run(self._key_names(), self._arguments())
-                batch = await self._lapses.claim_due(limit=_BATCH)
-                if not batch and not failed_runs:
-                    return
-                while batch:
-                    await self._handle_batch(handle, batch, tally)
-                    batch = await self._lapses.claim_due(limit=_BATCH)
-            except StoreError as error:
-                if error.outage and not failed_runs:
-                    timer.handled()
-                    timer.fail(FailureReason.OUTAGE)
-                    tally.end(timer)
-                raise
-            except asyncio.CancelledError:
-                if tally.lapse_count:
-                    tally.end(timer, cancelled=True)
-                raise
-            if failed_runs:
-                timer.add(failed_run_count=failed_runs)
-            tally.end(timer)
-
-    async def _handle_batch(
-        self, handle: Callable[[Lapse], Awaitable[None]], batch: list[Due], tally: _RoundTally
-    ) -> None:
-        pending = set(batch)
-        extender = asyncio.create_task(self._extend_while_pending(pending))
-        try:
-            for due in batch:
-                await self._handle_one(handle, due, pending, tally)
-        finally:
-            extender.cancel()
-            await asyncio.gather(extender, return_exceptions=True)
-
-    async def _handle_one(
-        self,
-        handle: Callable[[Lapse], Awaitable[None]],
-        due: Due,
-        pending: set[Due],
-        tally: _RoundTally,
-    ) -> None:
-        lapse = _lapse_of(due)
-        tally.lapse_count += 1
-        failure = None
-        with unit_trace(None):
-            try:
-                async with self._step_timer("lapse_handling.ended", lapse.holder):
-                    await handle(lapse)
-            except Exception as error:
-                failure = error
-                if not _holds_store_error(error):
-                    logger.error(
-                        "lapse_handler.failed",
-                        extra={
-                            "error_type": type(error).__name__,
-                            **self._lease_fields(lapse.holder),
-                        },
-                        exc_info=error,
-                    )
-        pending.discard(due)
-        if failure is not None:
-            tally.failed_count += 1
-            return
-        await self._lapses.done(due)
-
-    async def _extend_while_pending(self, pending: set[Due]) -> None:
-        claim_seconds = self._claim_for.total_seconds()
-        runs_out_at = dict.fromkeys(pending, time.monotonic() + claim_seconds)
-        unextended: set[Due] = set()
-        while True:
-            await asyncio.sleep(claim_seconds / _CLAIM_EXTENSIONS_PER_CLAIM)
-            for due in tuple(pending):
-                await self._extend_claim(due, pending, unextended, runs_out_at)
-
-    async def _extend_claim(
-        self,
-        due: Due,
-        pending: set[Due],
-        unextended: set[Due],
-        runs_out_at: dict[Due, float],
-    ) -> None:
-        fields = self._lease_fields(_lapse_of(due).holder)
-        if due in unextended:
-            kept = time.monotonic() < runs_out_at[due]
-        else:
-            try:
-                kept = await self._lapses.extend(due)
-            except StoreError as error:
-                logger.warning(
-                    "lapse_claim_extension.failed",
-                    extra={
-                        "reason": failure_reason(error),
-                        "error_type": type(error).__name__,
-                        **fields,
-                    },
-                )
-                if error.outage:
-                    # Redis may have applied the extension before its reply was lost, so
-                    # the claim's end is unknown: stop watching rather than call it expired.
-                    pending.discard(due)
-                else:
-                    unextended.add(due)
-                return
-            runs_out_at[due] = time.monotonic() + self._claim_for.total_seconds()
-        if not kept:
-            logger.warning("lapse_claim.expired", extra=fields)
-            pending.discard(due)
-
-    def _step_timer(self, event: str, holder: str) -> StepTimer:
-        return StepTimer(event, logger, lease_family=self._family, holder_id=holder)
-
-    def _lease_fields(self, holder: str) -> dict[str, str]:
-        return {"lease_family": self._family, "holder_id": holder}
 
     def _lease_state(self, reply: list[object]) -> LeaseState:
         liveness = _LIVENESS_OF_REPLY[cast(int, reply[0])]
