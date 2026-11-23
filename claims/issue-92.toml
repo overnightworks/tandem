@@ -1,8 +1,0 @@
-claim_id = "fc13a337b27845fb901608a57c81ecf0"
-agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
-role = "builder"
-base = "3bafd93b2d4a2a7e344451496ba810f15892ad1c"
-branch = "claude/issue-92-restart-tests-bring-redis-back-without-a"
-scope = ["quality/config.toml", "scripts/run_redis_tests.sh", "tests/conftest.py", "tests/support/restart.py", "tests/test_restart_wait.py"]
-opened_commit = "63ef9837dbe20ab8f31210d6eae53c649c320cf9"
-whole_reason = "One change replaces how the restartable Redis comes back; its script, the two docstrings that describe it and its regression test must agree."
