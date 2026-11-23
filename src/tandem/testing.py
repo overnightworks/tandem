@@ -62,9 +62,7 @@ async def settle_epoch(redis: Redis, *, key_prefix: str) -> None:
     """Set the epoch of the app that owns `key_prefix` so far in the past that every lease and
     lock family reads settled at once.
 
-    The epoch is the app's, shared by all families. Production code that calls this ends the
-    restart grace: after a Redis restart a lease or lock that Redis lost then reads GONE or free
-    at once, where it should read UNKNOWN until `lasts` have passed.
+    The epoch is the app's, shared by all families; `aged_epoch` says what setting it costs.
     """
     await redis.set(*aged_epoch(key_prefix=key_prefix))
 
