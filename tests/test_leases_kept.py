@@ -166,14 +166,7 @@ async def test_a_run_of_failed_renewals_writes_its_first_failure_and_its_recover
     log_lines: LogLines,
 ):
     """Spec: LEASE-14, LOG-8, LOG-19."""
-    leases = RenewalObservedLeases(
-        store_failure.client,
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=timedelta(seconds=30),
-        attempts=attempts,
-    )
+    leases = _observed_leases(store_failure.client, key_prefix, attempts)
 
     async with leases.kept("pod-a", every=EVERY) as hold:
         entered = hold.generation
@@ -247,14 +240,7 @@ async def test_a_block_that_exits_during_a_run_of_failed_renewals_writes_nothing
     log_lines: LogLines,
 ):
     """Spec: LOG-8."""
-    leases = RenewalObservedLeases(
-        proxied_client,
-        key_prefix=key_prefix,
-        family="owner",
-        lasts=LASTS,
-        claim_for=timedelta(seconds=30),
-        attempts=attempts,
-    )
+    leases = _observed_leases(proxied_client, key_prefix, attempts)
 
     async with AsyncExitStack() as stack:
         await stack.enter_async_context(leases.kept("pod-a", every=EVERY))
