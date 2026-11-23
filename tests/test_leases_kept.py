@@ -5,7 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 import pytest
-from logline import Outcome, unit_trace
+from logline import Outcome, current_traceparent, unit_trace
 from redis.asyncio import Redis
 
 from tandem import Leases, Liveness, Renewal, StoreError
@@ -21,8 +21,6 @@ from tests.support.waiting import until, within
 _LOGGER = "tandem.leases"
 LASTS = timedelta(milliseconds=600)
 EVERY = timedelta(milliseconds=100)
-_TRACE_ID = "0af7651916cd43dd8448eb211c80319c"
-_TRACEPARENT = f"00-{_TRACE_ID}-b7ad6b7169203331-01"
 
 
 class _GatedLeases(Leases):
@@ -203,11 +201,13 @@ async def test_the_lines_of_a_run_of_failed_renewals_are_written_in_the_trace_th
     """Spec: LOG-8."""
     leases = _observed_leases(store_failure.client, key_prefix, attempts)
 
-    with unit_trace(_TRACEPARENT):
+    with unit_trace(None):
+        traceparent = current_traceparent()
+        assert traceparent is not None
         await _kept_through_a_run_of_failures(leases, store_failure, attempts, log_lines, written=2)
 
     lines = log_lines.of("lease_keeping.ended", _LOGGER)
-    assert [line["trace_id"] for line in lines] == [_TRACE_ID, _TRACE_ID]
+    assert [line["trace_id"] for line in lines] == [traceparent.split("-")[1]] * 2
 
 
 async def test_a_run_of_failed_renewals_counts_per_kept_block(
