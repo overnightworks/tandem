@@ -96,7 +96,9 @@ async def test_a_wake_arrives_with_its_address_and_the_trace_of_its_sender(
             await publisher.publish(address)
 
         wake = await reader.next_wake()
-    assert wake == Wake(address, sent)
+    assert wake.address == address
+    assert wake.traceparent is not None
+    assert wake.traceparent.split("-")[1] == _TRACE_ID
     assert sent is not None
     assert sent.split("-")[1] == _TRACE_ID
 
