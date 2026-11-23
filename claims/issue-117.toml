@@ -1,0 +1,7 @@
+claim_id = "c4349ecf887b4096819fce9d760b1e7c"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
+role = "builder"
+base = "9623415388b96a99efc628ec1263a63f07c95d7b"
+branch = "claude/issue-117-host-tests-date-tandems-epoch-through-a"
+scope = ["docs/reference.md", "src/tandem/testing.py", "tests/test_testing_settle_epoch.py"]
+opened_commit = "164eee90c187942a27ec7f2ecb5ba00fe563a9c9"
