@@ -1,0 +1,8 @@
+claim_id = "0dd656b858be4886bacff2045508e415"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
+role = "builder"
+base = "838112364b15306645fd0c19d0991623a2c42a93"
+branch = "claude/issue-98-serve-lapses-closing-lines-are-logline-s"
+scope = [".github/workflows/ci.yml", "README.md", "docs/ARCHITECTURE.md", "docs/reference.md", "pyproject.toml", "src/tandem/leases.py", "tests/test_leases_serve.py", "uv.lock"]
+opened_commit = "9807c0407c14e93de842fee35beccfd669662a91"
+whole_reason = "The two lapse lines move to StepTimer together with the reference rows that state them, the traceback line, the logline floor their calls need and the tests that pin them; any part alone leaves the contract or CI false."
