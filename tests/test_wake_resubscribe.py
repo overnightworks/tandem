@@ -102,9 +102,9 @@ async def test_a_quiet_channel_resubscribes_at_the_clients_socket_timeout(
 async def test_a_drop_inside_the_retry_budget_yields_one_resubscribed(
     proxy: TcpProxy, make_client: Callable[..., Redis], key_prefix: str, redis_url: str
 ):
-    """redis-py's own re-subscription confirms through the reader, so tandem adds no copy of it.
+    """Spec: WAKE-26.
 
-    Spec: WAKE-26.
+    redis-py's own re-subscription confirms through the reader, so tandem adds no copy of it.
     """
     retry = Retry(ConstantBackoff(0.05), 100)
     client = make_client(proxy.url, retry=retry)
