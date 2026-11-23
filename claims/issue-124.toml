@@ -1,0 +1,8 @@
+claim_id = "c20911287b8a4dd3b70d3ac2f25d4fb0"
+agent = "Claude d966f10f-81c0-4505-962e-8b7040b0147b"
+role = "builder"
+base = "c0bf3cbb9e1168f3d32d9c7772e05ed71ec05cd4"
+branch = "claude/issue-124-tandem-pins-quality-v0-26-0"
+scope = [".github/workflows/ci.yml", ".github/workflows/code-scanning.yml", ".github/workflows/release.yml", "docs", "quality/baseline.toml", "quality/config.toml", "tests"]
+opened_commit = "47d036eff787fb0261167ec4ef1afb261071fc93"
+whole_reason = "the pin does not move before the list is recorded, so the pin, the conversion of documents and citations and the recorded list move in one pull request."
