@@ -87,6 +87,11 @@
         "verdicts": [],
         "risk": "normal"
       }
+    },
+    {
+      "run": "978f3d27bc4448579b06fe666a13d3e7",
+      "start_tip": "7dd36da23cc29a17e1dfadff21cf08b5354e6a02",
+      "follows": true
     }
   ]
 }
