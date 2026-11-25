@@ -1,0 +1,7 @@
+claim_id = "081082286994407c9ad86cf3d13ad8ea"
+agent = "Claude 4a2e965c-bdc6-45d4-a6cb-e434b810f5be"
+role = "builder"
+base = "c17c2c40f2d2ced43381cbe6d17b6fddcb6113e3"
+branch = "dependabot/uv/import-linter-2.17"
+scope = ["uv.lock"]
+opened_commit = "5623b6a253f71c7a9b3308b9c0f5d214d63149ed"
