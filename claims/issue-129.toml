@@ -1,0 +1,8 @@
+claim_id = "65d301f8d6664738bc840c5ede148d52"
+agent = "Claude bdd791b2-407c-42b8-9974-ecde0894b9af"
+role = "builder"
+base = "d3e7b89079c39b888f31833d503a3cac2605e2b3"
+branch = "claude/issue-129-tandem-pins-quality-v0-28-0"
+scope = [".github/workflows/ci.yml", ".github/workflows/code-scanning.yml", ".github/workflows/release.yml", "quality/config.toml", "tests/scripts/test_check_key_literals.py", "tests/test_check_key_literals.py"]
+opened_commit = "97554280b9418d568930e7ff7dfb434947827ba6"
+whole_reason = "One release adoption: the pins and the entry ends must land together, or quality check at v0.28.0 stops five areas."
