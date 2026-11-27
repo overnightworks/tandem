@@ -5,13 +5,10 @@ mandatory_jobs = ["checks", "lowest-direct"]
 path = "tests/test_restart_wait.py"
 rule = "test-layout"
 reason = "tests the suite's own restartable Redis (scripts/run_redis_tests.sh, tests/support/restart.py), which no src/tandem module owns"
+ends = "overnightworks/quality#1101"
 
 [[layout.allow]]
 path = "tests/test_proxy_teardown.py"
 rule = "test-layout"
 reason = "tests the suite's own TCP proxy (tests/support/proxy.py), which no src/tandem module owns"
-
-[[layout.allow]]
-path = "tests/test_check_key_literals.py"
-rule = "test-layout"
-reason = "drives scripts/check_key_literals.py, which is a repository script and no src/tandem module"
+ends = "overnightworks/quality#1101"
