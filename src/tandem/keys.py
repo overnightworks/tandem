@@ -44,17 +44,23 @@ def deadline_keys(key_prefix: str, kind: str) -> DeadlineKeys:
 
 @dataclass(frozen=True)
 class LeaseKeys:
-    """The keys of one lease family: the app's epoch, the expiry ZSET, the generation HASH and the
-    lapse queue, which is a deadline kind of its own."""
+    """The keys of one lease family: the app's epoch, the expiry ZSET and the generation HASH.
+
+    A host's script passes them from its own KEYS in this order and builds the `keys` table of
+    `tandem.lease_state` with `{epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}`.
+    """
 
     epoch: str
     expiry: str
     generation: str
-    lapse: DeadlineKeys
 
 
 def _app(key_prefix: str) -> str:
     return f"{checked_segment(key_prefix, argument='key_prefix')}:tandem:v1"
+
+
+def _lease_base(key_prefix: str, family: str) -> str:
+    return f"{_app(key_prefix)}:l:{checked_segment(family, argument='family')}"
 
 
 def epoch_key(key_prefix: str) -> str:
@@ -64,15 +70,16 @@ def epoch_key(key_prefix: str) -> str:
 
 def lease_keys(key_prefix: str, family: str) -> LeaseKeys:
     """The keys of the leases of `family` in the app that owns `key_prefix`."""
-    app = _app(key_prefix)
-    base = f"{app}:l:{checked_segment(family, argument='family')}"
-    lapse = f"{base}:lapse"
+    base = _lease_base(key_prefix, family)
     return LeaseKeys(
-        epoch=epoch_key(key_prefix),
-        expiry=f"{base}:expiry",
-        generation=f"{base}:generation",
-        lapse=DeadlineKeys(due=f"{lapse}:due", claimed=f"{lapse}:claimed", claim=f"{lapse}:claim"),
+        epoch=epoch_key(key_prefix), expiry=f"{base}:expiry", generation=f"{base}:generation"
     )
+
+
+def lapse_keys(key_prefix: str, family: str) -> DeadlineKeys:
+    """The lapse queue of the leases of `family`: a deadline kind of its own, internal to tandem."""
+    lapse = f"{_lease_base(key_prefix, family)}:lapse"
+    return DeadlineKeys(due=f"{lapse}:due", claimed=f"{lapse}:claimed", claim=f"{lapse}:claim")
 
 
 @dataclass(frozen=True)

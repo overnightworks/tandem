@@ -5,7 +5,7 @@ from tandem import testing
 from tandem.client import Client
 from tandem.deadlines import Deadlines, Due
 from tandem.errors import StoreError
-from tandem.keys import DeadlineKeys, LockKeys, checked_segment, wake_channel
+from tandem.keys import DeadlineKeys, LeaseKeys, LockKeys, checked_segment, wake_channel
 from tandem.leases import Hold, Lapse, Leases, LeaseState, Liveness, Renewal, Roster
 from tandem.locks import LockLost, Locks, LockState
 from tandem.lua import LUA_KIT
@@ -23,6 +23,7 @@ __all__ = [
     "Due",
     "Hold",
     "Lapse",
+    "LeaseKeys",
     "LeaseState",
     "Leases",
     "Liveness",
