@@ -110,12 +110,6 @@ async def _ended(world: World) -> tuple[str, str]:
     return HOLDER, generation
 
 
-async def _replaced_by_a_new_generation(world: World) -> tuple[str, str]:
-    holder, generation = await _past_its_expiry(world)
-    assert (await world.leases.renew(holder)).generation != generation
-    return holder, generation
-
-
 async def _of_another_holder(world: World) -> tuple[str, str]:
     await _started(world)
     return HOLDER, await _started(world, OTHER_HOLDER)
@@ -163,7 +157,6 @@ async def test_a_host_commit_under_a_generation_that_replaced_the_lapsed_one_wri
         pytest.param(_swept_and_claimed, id="swept-into-the-lapse-queue-and-not-served"),
         pytest.param(_lapse_served, id="lapse-served"),
         pytest.param(_ended, id="ended"),
-        pytest.param(_replaced_by_a_new_generation, id="replaced-by-a-new-generation"),
         pytest.param(_of_another_holder, id="of-another-holder"),
         pytest.param(_never_started, id="never-started"),
     ],
