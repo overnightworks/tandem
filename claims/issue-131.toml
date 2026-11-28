@@ -1,8 +1,0 @@
-claim_id = "4bdfe6f7b1d84467be1c52ebfb7e6ea0"
-agent = "Claude bdd791b2-407c-42b8-9974-ecde0894b9af"
-role = "builder"
-base = "543eecfa1780f48617ae8e906ba446bb6c49ed15"
-branch = "claude/issue-131-leases-offer-their-keys-and-a-lua-read-s"
-scope = ["docs/ARCHITECTURE.md", "docs/reference.md", "src/tandem/__init__.py", "src/tandem/keys.py", "src/tandem/leases.py", "src/tandem/lua.py", "tests/support/attempts.py", "tests/support/host_script.py", "tests/support/leases.py", "tests/test_leases_host.py", "tests/test_leases_keys.py", "tests/test_leases_serve.py", "tests/test_locks_host.py", "tests/test_locks_keys.py", "tests/test_slots_keys.py"]
-opened_commit = "662f0f4d55334b2edbf8c631f8f80531ab4f2936"
-whole_reason = "One public capability: the keys, the shared Lua read, the lease scripts that read through it, the split of the lapse keys and their documents change together, or the Python and Lua reads of one lease can disagree."
