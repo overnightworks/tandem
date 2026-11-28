@@ -52,7 +52,7 @@ class Host:
 
     async def written(self) -> str | None:
         """The generation the host's key holds, None while no commit wrote it."""
-        return await self._observer.get(self._committed)
+        return cast(str | None, await self._observer.get(self._committed))
 
 
 @dataclass(frozen=True)

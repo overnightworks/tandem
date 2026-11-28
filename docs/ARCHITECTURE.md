@@ -117,7 +117,9 @@ stateDiagram-v2
 ```
 
 `state` writes only the epoch: a lapse in any state is GONE, or UNKNOWN until `lasts` have passed since
-the epoch.
+the epoch. Every lease script that reads one holder reads it through `tandem.lease_state`, the function a
+host's fence calls, so `renew`, `end`, `state` and a fence cannot disagree about which generation is live;
+only `live` and the sweep read the range of every holder.
 
 A lock is one ZSET member scored by its expiry and one HASH field holding its generation; every lock
 script starts with `tandem.lock_state`, so a host's admit script that calls it takes the same snapshot:
@@ -219,6 +221,9 @@ the commands and the rules for waits and outages.
   held for ever by the losers that keep polling; `extend` needs the generation.
 - `tandem.lock_state` returns nil for a free lock, so `if tandem.lock_state(...) then` fails closed: a held
   lock and an unsettled epoch both refuse, in one atomic step with the host's write.
+- `tandem.lock_state` and `tandem.lease_state` are two public functions over one kit-local body, so a hold is
+  live while its expiry is after Redis `TIME` and an absent one is unknown until `lasts` have passed since the
+  epoch, made once. A fence writes only on `'live'` with its own generation: nil and `'unknown'` both refuse.
 - A lapse leaves the expiry ZSET for the lapse queue in the script that notices it, so a claim on a lapse
   never touches the expiry that decides ALIVE. The serving loop extends every pending claim of its batch, in
   `serve_lapses` and `serve_due` alike, so the claims of a mass lapse or of many due keys do not run out while
