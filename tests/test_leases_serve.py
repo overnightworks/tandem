@@ -11,7 +11,7 @@ from redis.asyncio import Redis
 
 from tandem import Lapse, Leases, Liveness, StoreError
 from tandem.errors import BACKOFF_FIRST_SECONDS
-from tandem.keys import lease_keys
+from tandem.keys import lapse_keys
 from tests.support.attempts import Attempts, ObservedLeases
 from tests.support.backoffs import BackoffRecordingLeases, Backoffs
 from tests.support.deadlines import (
@@ -289,7 +289,7 @@ async def test_a_claim_that_runs_out_leaves_the_handler_running(
 
     async with serving(leases, running) as task:
         await running.received()
-        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        await observer.delete(lapse_keys(key_prefix, "owner").claim)
         await until_redis_ms(client, await redis_ms(client) + 300)
         running.release()
         await until_redis_ms(client, await redis_ms(client) + 300)
@@ -542,7 +542,7 @@ async def test_a_handling_whose_claim_was_deleted_says_claim_not_kept_whether_it
 
     async with serving(observed_leases(make_client(redis_url), claim_for=LONG_CLAIM_FOR), handle):
         (lapse,) = await running.received()
-        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        await observer.delete(lapse_keys(key_prefix, "owner").claim)
         await attempts.until_unsuccessful()
         await elapsed(LONG_CLAIM_FOR.total_seconds() / 2)  # 1.5 extension intervals
         assert attempts.unsuccessful_count == 1
@@ -755,7 +755,7 @@ async def test_a_cancelled_handling_and_round_are_written_as_cancelled_without_c
     ) as task:
         await running.received()
         if claim_lost:
-            await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+            await observer.delete(lapse_keys(key_prefix, "owner").claim)
             await attempts.until_unsuccessful()
         task.cancel()
         (line,) = await log_lines.await_of("lapse_handling.ended", _LOGGER)
@@ -784,7 +784,7 @@ async def test_a_lapse_that_reaches_two_handlers_writes_a_line_for_each(
 
     async with serving(first, running):
         await running.received()
-        await observer.delete(lease_keys(key_prefix, "owner").lapse.claim)
+        await observer.delete(lapse_keys(key_prefix, "owner").claim)
         async with serving(second, replay):
             await replay.received()
             running.release()

@@ -5,18 +5,18 @@ from datetime import timedelta
 import pytest
 from redis.asyncio import Redis
 
-from tandem import Locks, Script
-from tandem.deadlines import milliseconds
+from tandem import Locks
+from tests.support.host_script import HostScript
 from tests.support.locks import wipe
 from tests.support.waiting import until
 
 LASTS = timedelta(milliseconds=300)
 
 # A host's admit: it reads the lock with `tandem.lock_state` and counts an admission only when the
-# lock is free. KEYS: the lock's keys, then the depth counter. ARGV: the name and `lasts` in ms.
+# lock is free. KEYS: the lock's keys, then the depth counter. ARGV: `lasts` in ms and the name.
 ADMIT = """
 local keys = {epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}
-if tandem.lock_state(keys, ARGV[1], ARGV[2]) then
+if tandem.lock_state(keys, ARGV[2], ARGV[1]) then
   return 0
 end
 redis.call('INCR', KEYS[4])
@@ -26,17 +26,10 @@ return 1
 
 class Admit:
     def __init__(self, client: Redis, locks: Locks, depth: str) -> None:
-        self._script = Script(client, ADMIT)
-        self._locks = locks
-        self._depth = depth
+        self._host = HostScript(client, ADMIT, locks, depth)
 
     async def __call__(self, name: str) -> bool:
-        keys = self._locks.keys
-        reply = await self._script.run(
-            [keys.epoch, keys.expiry, keys.generation, self._depth],
-            [name, milliseconds(self._locks.lasts)],
-        )
-        return reply == 1
+        return await self._host.run(name) == 1
 
 
 @pytest.fixture

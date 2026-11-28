@@ -8,7 +8,7 @@ from typing import NoReturn
 from redis.asyncio import Redis
 
 from tandem import Lapse, Leases, Liveness
-from tandem.keys import lease_keys
+from tandem.keys import lapse_keys, lease_keys
 from tests.support.deadlines import SERVING_EVERY, Handler, running
 from tests.support.waiting import until
 
@@ -27,14 +27,7 @@ def serving(
 async def wipe(observer: Redis, key_prefix: str, family: str) -> None:
     """Delete every key of the family and the app's epoch: the state a Redis restart leaves."""
     keys = lease_keys(key_prefix, family)
-    await observer.delete(
-        keys.epoch,
-        keys.expiry,
-        keys.generation,
-        keys.lapse.due,
-        keys.lapse.claimed,
-        keys.lapse.claim,
-    )
+    await observer.delete(*vars(keys).values(), *vars(lapse_keys(key_prefix, family)).values())
 
 
 async def liveness_of(leases: Leases, holder: str) -> Liveness:

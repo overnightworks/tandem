@@ -163,6 +163,10 @@ The leases of one `family` of one app. A lease lasts `lasts` after its latest re
 - LEASE-19: Each `handle` runs in a trace of its own, which ends with it.
 - LEASE-20: An outage or a refusal of Redis is ridden out with the back-off of the wake channel's following; `serve_lapses` ends only when cancelled.
 
+### `leases.keys`, `leases.lasts`
+
+- LEASE-23: The `LeaseKeys` (`epoch`, `expiry`, `generation`) and the `lasts` of the family, for a host's script that calls `tandem.lease_state`. A script gets the keys as `KEYS` in the order `epoch`, `expiry`, `generation` and builds the table with `local keys = {epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}`. The lapse queue's keys are not public.
+
 ### `Locks(redis, *, key_prefix, family, lasts)`
 
 The locks of one `family` of one app. A lock lasts `lasts` after its latest start or extension.
@@ -253,6 +257,10 @@ The result of `leases.state` for one holder: `generation` and `remaining` are No
 
 The result of `locks.state`: `generation` and `remaining` are None unless ALIVE.
 
+### `LeaseKeys`
+
+The record `leases.keys` returns.
+
 ### `LockKeys`
 
 The record `locks.keys` returns.
@@ -267,7 +275,7 @@ The type of the Redis client tandem takes, for a host's own parameter.
 
 ### `LUA_KIT`
 
-Lua that defines the table `tandem`; `Script` prepends it. `keys` of the deadline functions below is a table with the fields `due`, `claimed` and `claim`, built from the script's `KEYS` as above.
+Lua that defines the table `tandem`; `Script` prepends it. `keys` of the deadline functions below is a table with the fields `due`, `claimed` and `claim`, built from the script's `KEYS` as above; that of `lock_state` and `lease_state` has the fields `epoch`, `expiry` and `generation`.
 
 ### `tandem.now_ms()`
 
@@ -296,6 +304,10 @@ Lua that defines the table `tandem`; `Script` prepends it. `keys` of the deadlin
 ### `tandem.lock_state(keys, name, lasts_ms)`
 
 - LUA-6: Reads a lock without changing it, apart from creating the epoch when absent. `keys` has the fields `epoch`, `expiry` and `generation` (`locks.keys`); `lasts_ms` is `locks.lasts` in ms. Returns `{'held', generation, expires_ms}` while a live lock holds `name`, `{'unknown'}` while it is absent and `lasts_ms` have not passed since the epoch, and nil when it is free. `if tandem.lock_state(...) then` therefore refuses unless the lock is free and settled, so a host's admit script reads the lock and writes its own state in one atomic step.
+
+### `tandem.lease_state(keys, holder, lasts_ms)`
+
+- LUA-9: Reads a lease without changing it, apart from creating the epoch when absent. `keys` has the fields `epoch`, `expiry` and `generation` (`leases.keys`); `lasts_ms` is `leases.lasts` in ms. Returns `{'live', generation, expires_ms}` while `holder`'s lease is live (its expiry after Redis `TIME`), `{'unknown'}` while it is absent and `lasts_ms` have not passed since the epoch, and nil otherwise; a lease past its expiry reads so before any sweep. A fence writes only on `'live'` with its own generation, so every other reply refuses, whatever `lasts_ms` the host passes.
 
 ### `tandem.wake(channel, address, traceparent)`
 
@@ -513,7 +525,9 @@ Eleven duties remain: one for the wake, two for deadlines, four for leases, thre
    LEASE-10), so a pod with a shorter `lasts` may read a lost lease GONE early by at most the difference,
    under the host's fence (duty 6).
 6. **Fence a lease's effects with its generation, compared inside the host's own atomic write.** Only the
-   host's store can refuse the stale effect; a generation is random and compared only by equality.
+   host's store can refuse the stale effect; a generation is random and compared only by equality. A host
+   whose store is the same Redis compares inside its own script with `tandem.lease_state` and writes only when
+   it returns `'live'` with its generation, never with `leases.state` read beforehand: those are two steps.
 7. **Reconcile after a Redis restart, because what a lease freed is the host's durable state and only the host
    knows what to free.** A restart takes every lease, lapse and claim with it: a lapse in flight is never
    delivered, and an absent lease reads UNKNOWN until `lasts` have passed since the app's epoch and then GONE

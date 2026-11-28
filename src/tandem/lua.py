@@ -1,9 +1,9 @@
 """The Lua kit a host's script runs beside tandem's: one implementation of each transition."""
 
 # `keys` of the deadline functions is a table with the fields due, claimed and claim, the key names
-# of one deadline kind (`Deadlines.keys`); that of `lock_state` has the fields epoch, expiry and
-# generation (`Locks.keys`). A script passes them from its own KEYS, so the server sees every key
-# it uses.
+# of one deadline kind (`Deadlines.keys`); that of `lock_state` and `lease_state` has the fields
+# epoch, expiry and generation (`Locks.keys`, `Leases.keys`). A script passes them from its own
+# KEYS, so the server sees every key it uses.
 LUA_KIT = """
 local tandem = {}
 
@@ -64,20 +64,35 @@ function tandem.deadline_arm(keys, key, due_in_ms)
   return 1
 end
 
--- {'held', generation, expires_ms} while a live lock holds `name`; {'unknown'} while it is absent
--- and `lasts_ms` have not passed since the epoch, which this call creates when absent; else nil.
--- `if tandem.lock_state(...) then` therefore refuses unless the lock is free and settled.
-function tandem.lock_state(keys, name, lasts_ms)
+-- The one rule of a hold: it is live while its expiry is after Redis `TIME`, and an absent one is
+-- unknown until `lasts_ms` have passed since the epoch, which this call creates when absent.
+-- Returns {live_label, generation, expires_ms} while `holder`'s hold is live; {'unknown'} while it
+-- is absent and `lasts_ms` have not passed; else nil. The two public functions give the label.
+local function hold_state(live_label, keys, holder, lasts_ms)
   local now_ms = tandem.now_ms()
   local settled = tandem.epoch_settled(keys.epoch, now_ms, lasts_ms)
-  local expires_ms = redis.call('ZSCORE', keys.expiry, name)
+  local expires_ms = redis.call('ZSCORE', keys.expiry, holder)
   if expires_ms and tonumber(expires_ms) > now_ms then
-    return {'held', redis.call('HGET', keys.generation, name), tonumber(expires_ms)}
+    return {live_label, redis.call('HGET', keys.generation, holder), tonumber(expires_ms)}
   end
   if settled then
     return nil
   end
   return {'unknown'}
+end
+
+-- {'held', generation, expires_ms} while a live lock holds `name`; {'unknown'} while it is absent
+-- and `lasts_ms` have not passed since the epoch, which this call creates when absent; else nil.
+-- `if tandem.lock_state(...) then` therefore refuses unless the lock is free and settled.
+function tandem.lock_state(keys, name, lasts_ms)
+  return hold_state('held', keys, name, lasts_ms)
+end
+
+-- {'live', generation, expires_ms} while `holder`'s lease is live; {'unknown'} while it is absent
+-- and `lasts_ms` have not passed since the epoch, which this call creates when absent; else nil.
+-- A fence writes only on 'live' with its own generation, so every other reply refuses.
+function tandem.lease_state(keys, holder, lasts_ms)
+  return hold_state('live', keys, holder, lasts_ms)
 end
 
 -- Publishes `address` on the wake channel `channel` (`wake_channel(key_prefix)`) in the frame

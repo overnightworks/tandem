@@ -5,7 +5,7 @@ import pytest
 from redis.asyncio import Redis
 
 from tandem import Deadlines, Leases, Locks, Slots
-from tandem.keys import deadline_keys, lease_keys, lock_keys, slot_key, wake_channel
+from tandem.keys import deadline_keys, lapse_keys, lease_keys, lock_keys, slot_key, wake_channel
 from tests.support.slots import FAMILY, keys_of
 
 
@@ -56,9 +56,7 @@ async def test_a_family_named_like_another_structures_family_or_a_fixed_token_sh
         lease.epoch,
         lease.expiry,
         lease.generation,
-        lease.lapse.due,
-        lease.lapse.claimed,
-        lease.lapse.claim,
+        *vars(lapse_keys(key_prefix, name)).values(),
         lock.expiry,
         lock.generation,
         *vars(deadline_keys(key_prefix, name)).values(),

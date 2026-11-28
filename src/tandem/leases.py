@@ -24,38 +24,44 @@ from tandem.deadlines import (
     repeat_until_stopped,
     serve_queue,
 )
-from tandem.keys import lease_keys
+from tandem.keys import LeaseKeys, lapse_keys, lease_keys
 from tandem.script import Script
 
 logger: logging.Logger = logging.getLogger(__name__)
 
 _TOKEN_BYTES = 16  # 128 random bits per generation
 
-# Every script runs this first: `TIME`, the epoch (set only when absent) and the lease state are one
-# snapshot. ARGV[1] is `lasts` in ms. KEYS: epoch, expiry, generation, then the lapse queue's due,
-# claimed and claim.
+# Every script runs this first. ARGV[1] is `lasts` in ms. KEYS: epoch, expiry, generation, then the
+# lapse queue's due, claimed and claim. A script that reads one holder reads it through
+# `tandem.lease_state`, as a host's fence does, whose own `TIME` comes after `now_ms`, so a live
+# lease has an expiry after `now_ms`. Only the range reads of every holder compare `now_ms`.
 _PRELUDE = """
-local epoch_key, expiry, generations = KEYS[1], KEYS[2], KEYS[3]
+local keys = {epoch = KEYS[1], expiry = KEYS[2], generation = KEYS[3]}
 local lapse = {due = KEYS[4], claimed = KEYS[5], claim = KEYS[6]}
 local lasts_ms = tonumber(ARGV[1])
 local now_ms = tandem.now_ms()
-local settled = tandem.epoch_settled(epoch_key, now_ms, lasts_ms)
+local settled = tandem.epoch_settled(keys.epoch, now_ms, lasts_ms)
+
+-- The holder's lease state: {'live', generation, expires_ms}, {'unknown'} or nil.
+local function state_of(holder)
+  return tandem.lease_state(keys, holder, lasts_ms)
+end
 
 -- The expiry in ms of the holder's live lease, else false.
 local function live_until(holder)
-  local expires_ms = redis.call('ZSCORE', expiry, holder)
-  if expires_ms and tonumber(expires_ms) > now_ms then
-    return tonumber(expires_ms)
+  local state = state_of(holder)
+  if state and state[1] == 'live' then
+    return state[3]
   end
   return false
 end
 
 -- The holder's generation leaves its HASH and enters the lapse queue, due now.
 local function lapse_out(holder)
-  local generation = redis.call('HGET', generations, holder)
+  local generation = redis.call('HGET', keys.generation, holder)
   if generation then
     tandem.deadline_set(lapse, generation .. ':' .. holder, 0)
-    redis.call('HDEL', generations, holder)
+    redis.call('HDEL', keys.generation, holder)
   end
 end
 """
@@ -66,12 +72,12 @@ _RENEW = (
     + """
 local holder = ARGV[2]
 if live_until(holder) then
-  redis.call('ZADD', expiry, now_ms + lasts_ms, holder)
-  return {0, redis.call('HGET', generations, holder)}
+  redis.call('ZADD', keys.expiry, now_ms + lasts_ms, holder)
+  return {0, redis.call('HGET', keys.generation, holder)}
 end
 lapse_out(holder)
-redis.call('HSET', generations, holder, ARGV[3])
-redis.call('ZADD', expiry, now_ms + lasts_ms, holder)
+redis.call('HSET', keys.generation, holder, ARGV[3])
+redis.call('ZADD', keys.expiry, now_ms + lasts_ms, holder)
 return {1, ARGV[3]}
 """
 )
@@ -81,10 +87,10 @@ _END = (
     _PRELUDE
     + """
 local holder = ARGV[2]
-if redis.call('HGET', generations, holder) ~= ARGV[3] or not live_until(holder) then
+if redis.call('HGET', keys.generation, holder) ~= ARGV[3] or not live_until(holder) then
   return 0
 end
-redis.call('ZREM', expiry, holder)
+redis.call('ZREM', keys.expiry, holder)
 lapse_out(holder)
 return 1
 """
@@ -97,11 +103,11 @@ _STATE = (
 local reply = {}
 for index = 2, #ARGV do
   local holder = ARGV[index]
-  local expires_ms = live_until(holder)
-  if expires_ms then
-    reply[#reply + 1] = {1, redis.call('HGET', generations, holder), expires_ms - now_ms}
-  elseif settled then
+  local state = state_of(holder)
+  if not state then
     reply[#reply + 1] = {0}
+  elseif state[1] == 'live' then
+    reply[#reply + 1] = {1, state[2], state[3] - now_ms}
   else
     reply[#reply + 1] = {2}
   end
@@ -115,7 +121,7 @@ _LIVE = (
     _PRELUDE
     + """
 local reply = {settled and 1 or 0}
-for _, holder in ipairs(redis.call('ZRANGEBYSCORE', expiry, '(' .. now_ms, '+inf')) do
+for _, holder in ipairs(redis.call('ZRANGEBYSCORE', keys.expiry, '(' .. now_ms, '+inf')) do
   reply[#reply + 1] = holder
 end
 return reply
@@ -126,8 +132,8 @@ return reply
 _SWEEP = (
     _PRELUDE
     + """
-for _, holder in ipairs(redis.call('ZRANGEBYSCORE', expiry, '-inf', now_ms)) do
-  redis.call('ZREM', expiry, holder)
+for _, holder in ipairs(redis.call('ZRANGEBYSCORE', keys.expiry, '-inf', now_ms)) do
+  redis.call('ZREM', keys.expiry, holder)
   lapse_out(holder)
 end
 """
@@ -264,13 +270,24 @@ class Leases:
         self._family = family
         self._lasts = checked_span(lasts, argument="lasts")
         self._keys = lease_keys(key_prefix, family)
+        self._lapse_keys = lapse_keys(key_prefix, family)
         self._lasts_ms = milliseconds(lasts)
-        self._lapses = DeadlineQueue(redis, self._keys.lapse, claim_for)
+        self._lapses = DeadlineQueue(redis, self._lapse_keys, claim_for)
         self._renew = Script(redis, _RENEW)
         self._end = Script(redis, _END)
         self._state = Script(redis, _STATE)
         self._live = Script(redis, _LIVE)
         self._sweep = Script(redis, _SWEEP)
+
+    @property
+    def keys(self) -> LeaseKeys:
+        """The three keys of the family, for a host's script that runs `tandem.lease_state`."""
+        return self._keys
+
+    @property
+    def lasts(self) -> timedelta:
+        """How long a lease lasts, for the `lasts_ms` argument of `tandem.lease_state`."""
+        return self._lasts
 
     async def renew(self, holder: str) -> Renewal:
         """Keep `holder`'s lease for another `lasts`, starting one under a new generation if none
@@ -430,7 +447,7 @@ class Leases:
         )
 
     def _key_names(self) -> list[str]:
-        keys, lapse = self._keys, self._keys.lapse
+        keys, lapse = self._keys, self._lapse_keys
         return [keys.epoch, keys.expiry, keys.generation, lapse.due, lapse.claimed, lapse.claim]
 
     def _arguments(self, *rest: str) -> list[str | int | bytes]:

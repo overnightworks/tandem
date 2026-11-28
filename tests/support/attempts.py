@@ -73,7 +73,7 @@ class ObservedLeases(Leases):
     def __init__(self, redis: Redis, *, attempts: Attempts, **options: Any) -> None:
         super().__init__(redis, **options)
         self._lapses = _ObservedLapseQueue(
-            redis, self._keys.lapse, self._lapses.claim_for, attempts=attempts
+            redis, self._lapse_keys, self._lapses.claim_for, attempts=attempts
         )
 
 
